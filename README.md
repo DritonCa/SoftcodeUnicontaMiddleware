@@ -1,123 +1,119 @@
 # Softcode Uniconta Middleware
 
-Softcode Uniconta Middleware is an ASP.NET Core (.NET 8) API that exposes Uniconta ERP data through a secure, CMS-friendly, headless REST API.
+**Softcode Uniconta Middleware** is an **ASP.NET Core (.NET 8)** API that exposes **Uniconta ERP data** through a **secure, CMS-friendly, headless REST API**.
 
-It is designed as a generic ERP → CMS / platform integration layer with:
+It is designed as a **generic ERP → CMS / platform integration layer** with:
 
-Explicit, stable DTOs
+- Explicit, stable DTOs  
+- Secure authentication (Client Credentials + JWT)  
+- Refresh tokens  
+- Rate limiting  
+- Caching  
+- Stateless, scalable architecture  
 
-Secure authentication (Client Credentials + JWT)
+---
 
-Refresh tokens
+## 🎯 Purpose
 
-Rate limiting
-
-Caching
-
-Stateless, scalable architecture
-
-🎯 Purpose
-
-Uniconta’s SDK is powerful, but not suitable to expose directly to external systems.
+Uniconta’s SDK is powerful, but **not suitable to expose directly** to external systems.
 
 This middleware:
 
-Translates Uniconta SDK data into safe, stable DTOs
-
-Prevents SDK object graph leaks
-
-Supports batch sync, range loading, and incremental access
-
-Protects Uniconta against abuse and credential leakage
-
-Works with any CMS, headless frontend, or BI system
+- Translates Uniconta SDK data into **safe, stable DTOs**
+- Prevents SDK object graph leaks
+- Supports **batch sync**, **range loading**, and **incremental access**
+- Protects Uniconta against abuse and credential leakage
+- Works with **any CMS, headless frontend, or BI system**
 
 Typical consumers:
 
-CMS systems
+- CMS systems  
+- Headless storefronts  
+- Power BI  
+- Custom backend services  
 
-Headless storefronts
+---
 
-Power BI
+## 🧱 Architecture Overview
 
-Custom backend services
-
-🧱 Architecture Overview
 Client / CMS / BI
-        ↓
+↓
 Client-ID + Client-Secret
-        ↓
+↓
 Auth API (JWT + Refresh Token)
-        ↓
+↓
 Softcode Uniconta Middleware
-        ↓
+↓
 Uniconta SDK
 
-Key principles
+markdown
+Copy code
 
-Stateless API (no server-side sessions)
+### Key principles
 
-JWT-based authentication
+- **Stateless API** (no server-side sessions)
+- **JWT-based authentication**
+- **Short-lived access tokens**
+- **Encrypted credential cache**
+- **Explicit DTOs only**
+- **Batch-first design**
 
-Short-lived access tokens
+---
 
-Encrypted credential cache
+## 🔐 Authentication Model
 
-Explicit DTOs only
+Authentication is **token-based**, not session-based.
 
-Batch-first design
-
-🔐 Authentication Model
-
-Authentication is token-based, not session-based.
-
-1️⃣ Client Authentication (API access)
+### 1️⃣ Client Authentication (API access)
 
 Each consumer gets its own credentials:
 
-X-Client-Id
-
-X-Client-Secret
+- `X-Client-Id`
+- `X-Client-Secret`
 
 These are:
 
-Stored hashed in the database
+- Stored **hashed** in the database
+- Used **only** to access `/api/auth/login`
+- Never reused after login
 
-Used only to access /api/auth/login
+---
 
-Never reused after login
+### 2️⃣ Login (Uniconta authentication)
 
-2️⃣ Login (Uniconta authentication)
-
-Endpoint
+**Endpoint**
 
 POST /api/auth/login
 
+markdown
+Copy code
 
-Headers
+**Headers**
 
 X-Client-Id: your-client-id
 X-Client-Secret: your-client-secret
 Content-Type: application/json
 
+css
+Copy code
 
-Body
+**Body**
 
+```json
 {
   "userName": "api@company.dk",
   "password": "UNICONTA_PASSWORD",
   "apiKey": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
-
-
 Response
 
+json
+Copy code
 {
   "access_token": "eyJhbGciOiJIUzI1NiIs...",
   "refresh_token": "long_random_string",
   "token_type": "Bearer"
 }
-
 Important notes
 
 Uniconta password is used once
@@ -128,36 +124,38 @@ Password is cached encrypted with TTL
 
 Client secrets are never returned
 
-3️⃣ Accessing protected endpoints
-
+# 3️⃣ Accessing protected endpoints
 All API endpoints require a valid Bearer token:
 
+makefile
+Copy code
 Authorization: Bearer <access_token>
-
-4️⃣ Refresh token flow
-
+# 4️⃣ Refresh token flow
 When the access token expires:
 
+bash
+Copy code
 POST /api/auth/refresh
-
-
 Body
 
+json
+Copy code
 "refresh_token_here"
-
-
 A new access token and rotated refresh token are returned.
 
-✔ Refresh tokens are server-stored
-✔ Rotated on use
-✔ Revocable
-✔ Ready for Redis / DB persistence
+Refresh tokens are server-stored
 
-📦 Products API
+Rotated on use
+
+Revocable
+
+Ready for Redis / DB persistence
+
+# 📦 Products API
 List / Range / Batch
+bash
+Copy code
 GET /api/uniconta/products
-
-
 Query parameters
 
 Name	Type	Default	Description
@@ -167,45 +165,48 @@ includeDynamic	bool	false	Include dynamic ERP fields
 
 Example
 
+pgsql
+Copy code
 GET /api/uniconta/products?offset=0&limit=50
-
 Single Product
+swift
+Copy code
 GET /api/uniconta/products/{sku}
-
-
 Optional:
 
+ruby
+Copy code
 ?includeDynamic=true
-
-👤 Debtors (Customers) API
+# 👤 Debtors (Customers) API
 List / Batch
+bash
+Copy code
 GET /api/uniconta/debtors
-
-
 Query parameters
 
 Name	Type	Default
 offset	int	0
 limit	int	100
 includeDynamic	bool	false
+
 Single Debtor
+swift
+Copy code
 GET /api/uniconta/debtors/{account}
-
-🧬 Dynamic Fields (includeDynamic=true)
-
+# 🧬 Dynamic Fields (includeDynamic=true)
 When enabled, additional ERP fields are returned under extensions.
 
 Example:
 
+json
+Copy code
 "extensions": {
   "_Account": "10000",
   "_Blocked": false,
   "_Group": "DK",
   "_CreditMax": 50000
 }
-
 Guarantees
-
 Flat structure only
 
 Safe primitive values
@@ -216,16 +217,15 @@ No circular references
 
 Serializer-safe
 
-🧪 Debug Endpoints (Internal Use Only)
+# 🧪 Debug Endpoints (Internal Use Only)
+swift
+Copy code
 GET /api/debug/uniconta/debtors
 GET /api/debug/uniconta/products/prod
 GET /api/debug/uniconta/products/inv
-
-
 ⚠️ Do not expose publicly
 
-🚦 Rate Limiting
-
+# 🚦 Rate Limiting
 Global rate limiting is enabled:
 
 30 requests per 10 seconds
@@ -238,10 +238,10 @@ No queue
 
 Excess requests return:
 
+nginx
+Copy code
 HTTP 429 Too Many Requests
-
 ⚡ Caching Strategy
-
 In-memory caching is used to:
 
 Reduce Uniconta load
@@ -260,7 +260,7 @@ Offset + limit aware
 
 No timestamps are relied on.
 
-🛡 Error Handling
+# 🛡 Error Handling
 Scenario	Response
 Invalid client credentials	401 Unauthorized
 Invalid or expired token	401 Unauthorized
@@ -270,8 +270,7 @@ Internal error	500 Internal Server Error
 
 Controllers never rely on session state.
 
-🧰 Tech Stack
-
+# 🧰 Tech Stack
 .NET 8
 
 ASP.NET Core
@@ -288,34 +287,26 @@ JWT + Refresh Tokens
 
 Built-in ASP.NET Rate Limiter
 
+SSH-based GitHub workflow
 
-🚀 Current Status
-
+# 🚀 Current Status
 ✔ Client-ID + Client-Secret authentication
+
 ✔ JWT access tokens
+
 ✔ Refresh tokens (rotating)
+
 ✔ Encrypted Uniconta credential cache
+
 ✔ Products: batch + single
+
 ✔ Debtors: batch + single
+
 ✔ Dynamic fields (safe)
+
 ✔ Rate limiting
+
 ✔ Caching
+
 ✔ Stateless architecture
 
-🔜 Planned / Easy Extensions
-
-Redis-backed credential & token stores
-
-Orders & OrderLines
-
-Admin endpoints for client management
-
-Token revocation & auditing
-
-Webhooks / event sync
-
-📌 Notes
-
-This project is designed as infrastructure, not a CMS plugin.
-
-Any CMS, frontend, or integration platform can consume it safely.
