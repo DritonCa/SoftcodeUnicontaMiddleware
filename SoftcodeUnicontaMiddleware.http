@@ -1,0 +1,6 @@
+@SoftcodeUnicontaMiddleware_HostAddress = http://localhost:5232
+
+GET {{SoftcodeUnicontaMiddleware_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
