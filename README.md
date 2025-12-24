@@ -1,4 +1,4 @@
-﻿Softcode Uniconta Middleware
+Softcode Uniconta Middleware
 
 Softcode Uniconta Middleware is an ASP.NET Core (.NET 8) API that exposes Uniconta ERP data through a secure, CMS-friendly, headless REST API.
 
@@ -301,3 +301,21 @@ Built-in ASP.NET Rate Limiter
 ✔ Rate limiting
 ✔ Caching
 ✔ Stateless architecture
+
+🔜 Planned / Easy Extensions
+
+Redis-backed credential & token stores
+
+Orders & OrderLines
+
+Admin endpoints for client management
+
+Token revocation & auditing
+
+Webhooks / event sync
+
+📌 Notes
+
+This project is designed as infrastructure, not a CMS plugin.
+
+Any CMS, frontend, or integration platform can consume it safely.
