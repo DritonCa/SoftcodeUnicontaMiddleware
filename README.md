@@ -94,12 +94,6 @@ X-Client-Id: your-client-id
 X-Client-Secret: your-client-secret
 Content-Type: application/json
 
-css
-Copy code
-
-**Body**
-
-```json
 {
   "userName": "api@company.dk",
   "password": "UNICONTA_PASSWORD",
@@ -107,13 +101,13 @@ Copy code
 }
 Response
 
-json
-Copy code
 {
   "access_token": "eyJhbGciOiJIUzI1NiIs...",
   "refresh_token": "long_random_string",
   "token_type": "Bearer"
 }
+
+
 Important notes
 
 Uniconta password is used once
