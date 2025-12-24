@@ -1,7 +1,11 @@
-﻿using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using SoftcodeUnicontaMiddleware.Data;
+using SoftcodeUnicontaMiddleware.Filters;
+using SoftcodeUnicontaMiddleware.Services;
 using SoftcodeUnicontaMiddleware.UnicontaService;
+using System.Text;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,15 +18,50 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ✅ REQUIRED: Memory cache (for UnicontaServiceClient)
 builder.Services.AddMemoryCache();
 
-// ✅ Uniconta session (singleton = one ERP session per API)
-builder.Services.AddSingleton<UnicontaSessionService>();
+// ✅ REQUIRED for UnicontaServiceClientFactory
+builder.Services.AddHttpContextAccessor();
 
-// ----------------------------------------------------
-// RATE LIMITING (GLOBAL)
-// ----------------------------------------------------
+// 🔐 JWT AUTH
+var jwt = builder.Configuration.GetSection("Jwt");
+
+var jwtKey = jwt["Key"]
+    ?? throw new InvalidOperationException("Jwt:Key is missing");
+
+var key = Encoding.UTF8.GetBytes(jwtKey);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwt["Issuer"],
+            ValidAudience = jwt["Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(key)
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+builder.Services.AddScoped<UnicontaServiceClientFactory>();
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlite("Data Source=softcode_api.db");
+});
+
+
+builder.Services.AddScoped<IClientAuthService, ClientAuthService>();
+builder.Services.AddScoped<ClientAuthFilter>();
+builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddScoped<IUnicontaCredentialStore, MemoryUnicontaCredentialStore>();
+builder.Services.AddDataProtection();
+builder.Services.AddScoped<IRefreshTokenStore, MemoryRefreshTokenStore>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -31,19 +70,19 @@ builder.Services.AddRateLimiter(options =>
         var key = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
         return RateLimitPartition.GetSlidingWindowLimiter(
-            partitionKey: key,
-            factory: _ => new SlidingWindowRateLimiterOptions
+            key,
+            _ => new SlidingWindowRateLimiterOptions
             {
-                PermitLimit = 30,              // 30 requests
+                PermitLimit = 30,
                 Window = TimeSpan.FromSeconds(10),
-                SegmentsPerWindow = 10,        // smooth sliding window
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 0                 // reject immediately
+                SegmentsPerWindow = 10,
+                QueueLimit = 0
             });
     });
 
     options.RejectionStatusCode = 429;
 });
+
 
 var app = builder.Build();
 
@@ -53,7 +92,6 @@ var app = builder.Build();
 
 app.UseRateLimiter();
 
-// Swagger only in dev
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -61,7 +99,16 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Data.AppDbContext>();
+    SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db);
+}
 
 app.Run();

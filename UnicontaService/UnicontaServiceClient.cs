@@ -40,6 +40,17 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             _cache = cache;
         }
 
+        public int CompanyId
+        {
+            get
+            {
+                if (_company == null)
+                    throw new InvalidOperationException("Company not initialized");
+
+                return _company.CompanyId;
+            }
+        }
+
         public async Task InitializeAsync()
         {
             var connection = new UnicontaConnection(APITarget.Live);

@@ -1,42 +1,42 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using SoftcodeUnicontaMiddleware.UnicontaService;
 
 namespace SoftcodeUnicontaMiddleware.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/uniconta/products")]
     public class ProductsController : ControllerBase
     {
-        private readonly UnicontaSessionService _session;
+        private readonly UnicontaServiceClientFactory _factory;
 
-        public ProductsController(UnicontaSessionService session)
+        public ProductsController(UnicontaServiceClientFactory factory)
         {
-            _session = session;
+            _factory = factory;
         }
 
         [HttpGet]
-        public IActionResult Get(
+        public async Task<IActionResult> Get(
             int offset = 0,
             int limit = 100,
             bool includeDynamic = false)
         {
-            if (!_session.IsInitialized)
-                return Unauthorized("Uniconta session not initialized");
+            var client = await _factory.CreateAsync();
 
             return Ok(
-                _session.Client.GetProductsPaged(offset, limit, includeDynamic)
+                client.GetProductsPaged(offset, limit, includeDynamic)
             );
         }
 
         [HttpGet("{sku}")]
-        public IActionResult GetOne(
+        public async Task<IActionResult> GetOne(
             string sku,
             bool includeDynamic = false)
         {
-            if (!_session.IsInitialized)
-                return Unauthorized("Uniconta session not initialized");
+            var client = await _factory.CreateAsync();
 
-            var product = _session.Client.GetProductBySku(sku, includeDynamic);
+            var product = client.GetProductBySku(sku, includeDynamic);
 
             return product == null
                 ? NotFound()

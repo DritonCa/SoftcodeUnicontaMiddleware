@@ -1,45 +1,42 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using SoftcodeUnicontaMiddleware.UnicontaService;
-using System;
 
 namespace SoftcodeUnicontaMiddleware.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/uniconta/debtors")]
     public class DebtorsController : ControllerBase
     {
-        private readonly UnicontaSessionService _session;
+        private readonly UnicontaServiceClientFactory _factory;
 
-        public DebtorsController(UnicontaSessionService session)
+        public DebtorsController(UnicontaServiceClientFactory factory)
         {
-            _session = session;
+            _factory = factory;
         }
 
-        // LIST / BATCH
         [HttpGet]
-        public IActionResult Get(
+        public async Task<IActionResult> Get(
             int offset = 0,
             int limit = 100,
             bool includeDynamic = false)
         {
-            if (!_session.IsInitialized)
-                return Unauthorized("Uniconta session not initialized");
+            var client = await _factory.CreateAsync();
 
             return Ok(
-                _session.Client.GetDebtorsPaged(offset, limit, includeDynamic)
+                client.GetDebtorsPaged(offset, limit, includeDynamic)
             );
         }
 
-        // SINGLE
         [HttpGet("{account}")]
-        public IActionResult GetOne(
+        public async Task<IActionResult> GetOne(
             string account,
             bool includeDynamic = false)
         {
-            if (!_session.IsInitialized)
-                return Unauthorized("Uniconta session not initialized");
+            var client = await _factory.CreateAsync();
 
-            var debtor = _session.Client.GetDebtorByAccount(account, includeDynamic);
+            var debtor = client.GetDebtorByAccount(account, includeDynamic);
 
             return debtor == null
                 ? NotFound()
