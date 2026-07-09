@@ -146,27 +146,42 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
 
             var q = new QueryAPI(_session, _company);
 
-            var prod = q.Query<ProdItemClient>().Result ?? Array.Empty<ProdItemClient>();
-            var inv = q.Query<InvItemClient>().Result ?? Array.Empty<InvItemClient>();
+            var invItems = q.Query<InvItemClient>().Result ?? Array.Empty<InvItemClient>();
+            var prodItems = q.Query<ProdItemClient>().Result ?? Array.Empty<ProdItemClient>();
 
-            var version = ComputeHash(inv.Select(i => $"{i._Item}:{i._Blocked}"));
+            var prodMap = prodItems.ToDictionary(p => p._Item);
 
+            var version = ComputeHash(invItems.Select(i => $"{i._Item}:{i._Blocked}"));
             var cacheKey =
                 $"tenant:{TenantKey}:products:v{version}:{offset}:{limit}:{includeDynamic}";
 
             if (_cache.TryGetValue(cacheKey, out PagedResponse<ProductDto> cached))
                 return cached;
 
-            var prodMap = prod.ToDictionary(p => p._Item);
-            var all = new List<ProductDto>();
-
-            foreach (var invItem in inv)
+            var all = invItems.Select(inv =>
             {
-                prodMap.TryGetValue(invItem._Item, out var prodItem);
+                prodMap.TryGetValue(inv._Item, out var prod);
 
-                var dto = MapProduct(invItem._Item, prodItem, invItem, includeDynamic);
-                all.Add(dto);
-            }
+                var dto = new ProductDto
+                {
+                    Sku = inv._Item,
+                    Name = inv._Name,
+                    Group = inv._Group,
+                    SalesPrice = inv._SalesPrice1,
+                    CostPrice = inv._CostPrice,
+                    StockOnHand = inv._qtyOnStock,
+                    StockReserved = inv._qtyReserved,
+                    StockAvailable = inv._qtyOnStock - inv._qtyReserved,
+                    IsStockItem = inv._ItemType == 2,
+                    Unit = inv._Unit.ToString(),
+                    Blocked = inv._Blocked
+                };
+
+                if (includeDynamic)
+                    dto.Extensions = Extensions(inv, prod);
+
+                return dto;
+            }).ToList();
 
             var page = all.Skip(offset).Take(limit).ToList();
 
@@ -197,18 +212,9 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             var prod = q.Query<ProdItemClient>().Result
                 ?.FirstOrDefault(p => p._Item == sku);
 
-            return MapProduct(sku, prod, inv, includeDynamic);
-        }
-
-        private ProductDto MapProduct(
-            string sku,
-            ProdItemClient prod,
-            InvItemClient inv,
-            bool includeDynamic)
-        {
             var dto = new ProductDto
             {
-                Sku = sku,
+                Sku = inv._Item,
                 Name = inv._Name,
                 Group = inv._Group,
                 SalesPrice = inv._SalesPrice1,
@@ -222,14 +228,14 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             };
 
             if (includeDynamic)
-                dto.Extensions = Extensions(prod, inv);
+                dto.Extensions = Extensions(inv, prod);
 
             return dto;
         }
 
         // ---------------- DEBTORS ----------------
 
-        public PagedResponse<DebtorDto> GetDebtorsPaged(
+        public PagedResponse<object> GetDebtorsPaged(
             int offset,
             int limit,
             bool includeDynamic)
@@ -244,14 +250,27 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             var cacheKey =
                 $"tenant:{TenantKey}:debtors:v{version}:{offset}:{limit}:{includeDynamic}";
 
-            if (_cache.TryGetValue(cacheKey, out PagedResponse<DebtorDto> cached))
+            if (_cache.TryGetValue(cacheKey, out PagedResponse<object> cached))
                 return cached;
 
-            var all = debtors.Select(d => MapDebtor(d, includeDynamic)).ToList();
+            var all = debtors
+                .Select(d =>
+                    includeDynamic
+                        ? (object)UnicontaEntitySerializer.Serialize(d)
+                        : new
+                        {
+                            Account = d._Account,
+                            Name = d._Name,
+                            Email = d._ContactEmail,
+                            Phone = d._Phone,
+                            Balance = d._CurBalance,
+                            Blocked = d._Blocked
+                        })
+                .ToList();
 
             var page = all.Skip(offset).Take(limit).ToList();
 
-            var result = new PagedResponse<DebtorDto>
+            var result = new PagedResponse<object>
             {
                 Items = page,
                 Offset = offset,
@@ -299,8 +318,8 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
                 PaymentMethod = (int)d._PaymentMethod,
                 CreditMax = d._CreditMax,
                 Balance = d._CurBalance,
-                Overdue = d._Overdue,
-                Blocked = d._Blocked
+                Overdue = d._Overdue
+
             };
 
             if (includeDynamic)
@@ -309,49 +328,34 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             return dto;
         }
 
-        // ---------------- DEBUG ----------------
+        // ---------------- ORDERS ----------------
 
-        public Dictionary<string, object> DebugDumpFirstDebtor()
+        public async Task<Debtor[]> GetAllDebtorsAsync()
         {
             EnsureInit();
-
             var q = new QueryAPI(_session, _company);
-            var d = q.Query<Debtor>().Result?.FirstOrDefault();
-            if (d == null) return null;
-
-            return d.GetType()
-                .GetFields(System.Reflection.BindingFlags.Instance |
-                           System.Reflection.BindingFlags.Public |
-                           System.Reflection.BindingFlags.NonPublic)
-                .ToDictionary(f => f.Name, f => f.GetValue(d));
+            return await q.Query<Debtor>() ?? Array.Empty<Debtor>();
         }
 
-        public List<Dictionary<string, object>> DebugDumpProdItems()
+        public async Task<ErrorCodes> CreateDebtorAsync(DebtorClient debtor)
         {
             EnsureInit();
-
-            var q = new QueryAPI(_session, _company);
-            return q.Query<ProdItemClient>().Result
-                .Select(i => i.GetType()
-                    .GetFields(System.Reflection.BindingFlags.Instance |
-                               System.Reflection.BindingFlags.Public |
-                               System.Reflection.BindingFlags.NonPublic)
-                    .ToDictionary(f => f.Name, f => f.GetValue(i)))
-                .ToList();
+            var crud = new CrudAPI(_session, _company);
+            return await crud.Insert(debtor);
         }
 
-        public List<Dictionary<string, object>> DebugDumpInvItems()
+        public async Task<ErrorCodes> CreateOrderHeaderAsync(DebtorOrder order)
         {
             EnsureInit();
+            var crud = new CrudAPI(_session, _company);
+            return await crud.Insert(order);
+        }
 
-            var q = new QueryAPI(_session, _company);
-            return q.Query<InvItemClient>().Result
-                .Select(i => i.GetType()
-                    .GetFields(System.Reflection.BindingFlags.Instance |
-                               System.Reflection.BindingFlags.Public |
-                               System.Reflection.BindingFlags.NonPublic)
-                    .ToDictionary(f => f.Name, f => f.GetValue(i)))
-                .ToList();
+        public async Task<ErrorCodes> CreateOrderLineAsync(DebtorOrderLine line)
+        {
+            EnsureInit();
+            var crud = new CrudAPI(_session, _company);
+            return await crud.Insert(line);
         }
     }
 }

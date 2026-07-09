@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using SoftcodeUnicontaMiddleware.Data;
@@ -60,27 +61,39 @@ builder.Services.AddScoped<IClientAuthService, ClientAuthService>();
 builder.Services.AddScoped<ClientAuthFilter>();
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddScoped<IUnicontaCredentialStore, MemoryUnicontaCredentialStore>();
-builder.Services.AddDataProtection();
+builder.Services
+    .AddDataProtection()
+    .PersistKeysToFileSystem(
+        new DirectoryInfo(Path.Combine(
+            builder.Environment.ContentRootPath,
+            "dataprotection-keys")))
+    .SetApplicationName("SoftcodeUnicontaMiddleware");
 builder.Services.AddScoped<IRefreshTokenStore, MemoryRefreshTokenStore>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IAuditLogger, AuditLogger>();
+builder.Services.AddScoped<SoftcodeUnicontaMiddleware.Services.OrderService>();
 
 builder.Services.AddRateLimiter(options =>
 {
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    options.AddPolicy("auth", context =>
     {
-        var key = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var clientId = context.Request.Headers["X-Client-Id"].FirstOrDefault();
+
+        var key = string.IsNullOrWhiteSpace(clientId)
+            ? $"auth:ip:{ip}"
+            : $"auth:client:{clientId}:ip:{ip}";
 
         return RateLimitPartition.GetSlidingWindowLimiter(
             key,
             _ => new SlidingWindowRateLimiterOptions
             {
-                PermitLimit = 30,
-                Window = TimeSpan.FromSeconds(10),
-                SegmentsPerWindow = 10,
+                PermitLimit = 5,               // very strict
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 1,
                 QueueLimit = 0
             });
     });
-
-    options.RejectionStatusCode = 429;
 });
 
 
@@ -103,11 +116,14 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.UseMiddleware<SoftcodeUnicontaMiddleware.Middleware.ApiExceptionMiddleware>();
+
 app.MapControllers();
 
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Data.AppDbContext>();
+    db.Database.Migrate();
     SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db);
 }
 

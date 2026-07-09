@@ -1,0 +1,183 @@
+using SoftcodeUnicontaMiddleware.Models.Orders;
+using SoftcodeUnicontaMiddleware.UnicontaService;
+using Uniconta.ClientTools.DataModel;
+using Uniconta.Common;
+using Uniconta.DataModel;
+
+namespace SoftcodeUnicontaMiddleware.Services;
+
+public class OrderService
+{
+    private readonly ILogger<OrderService> _logger;
+
+    public OrderService(ILogger<OrderService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task ProcessAsync(OrderRequest req, UnicontaServiceClient client)
+    {
+        try
+        {
+            _logger.LogInformation("Processing Uniconta order {OrderId} type={Type}", req.OrderId, req.CustomerType);
+
+            var debtors = await client.GetAllDebtorsAsync();
+            var account = FindDebtorAccount(debtors, req);
+
+            if (account == null)
+            {
+                var debtor = BuildDebtor(req);
+                var createResult = await client.CreateDebtorAsync(debtor);
+                if (createResult != ErrorCodes.Succes)
+                    _logger.LogWarning("CreateDebtor returned {Code} for order {OrderId}", createResult, req.OrderId);
+
+                // Use email (or EAN/CVR) as account key since we just created it
+                account = req.CustomerType == "ean" ? (req.Ean ?? req.Email)
+                        : req.CustomerType == "cvr" ? (req.Cvr ?? req.Email)
+                        : req.Email;
+            }
+
+            var order = BuildOrderHeader(req, account);
+            var orderResult = await client.CreateOrderHeaderAsync(order);
+            if (orderResult != ErrorCodes.Succes)
+            {
+                _logger.LogError("CreateOrderHeader failed {Code} for order {OrderId}", orderResult, req.OrderId);
+                return;
+            }
+
+            // Skip shipping if every item is a course or module
+            var onlyCourseItems = req.Items.All(i => i.IsCourseOrModule);
+
+            foreach (var item in req.Items)
+            {
+                var line = BuildOrderLine(req.OrderId, item);
+                var lineResult = await client.CreateOrderLineAsync(line);
+                if (lineResult != ErrorCodes.Succes)
+                    _logger.LogWarning("CreateOrderLine failed {Code} SKU={Sku} order={OrderId}", lineResult, item.Sku, req.OrderId);
+            }
+
+            if (!onlyCourseItems && req.ShippingAmount > 0)
+            {
+                var shippingLine = new DebtorOrderLine
+                {
+                    _OrderNumber = req.OrderId,
+                    _Item        = req.ShippingProductSku,
+                    _Price       = req.ShippingAmount,
+                    _Qty         = 1,
+                    _Storage     = StorageRegister.Move
+                };
+                var shResult = await client.CreateOrderLineAsync(shippingLine);
+                if (shResult != ErrorCodes.Succes)
+                    _logger.LogWarning("Shipping line failed {Code} for order {OrderId}", shResult, req.OrderId);
+            }
+
+            _logger.LogInformation("Uniconta order {OrderId} submitted", req.OrderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Order processing failed for order {OrderId}", req.OrderId);
+        }
+    }
+
+    // ---- Debtor matching -------------------------------------------------------
+
+    private static string? FindDebtorAccount(Debtor[] debtors, OrderRequest req)
+    {
+        foreach (var d in debtors)
+        {
+            bool emailMatch   = !string.IsNullOrEmpty(req.Email) && d._ContactEmail == req.Email;
+            bool addressMatch = !string.IsNullOrEmpty(req.DeliveryAddress) && d._Address1 == req.DeliveryAddress;
+
+            if (emailMatch || addressMatch)
+                return d._Account;
+        }
+        return null;
+    }
+
+    // ---- Debtor creation -------------------------------------------------------
+
+    private static DebtorClient BuildDebtor(OrderRequest req)
+    {
+        var debtor = new DebtorClient
+        {
+            _Name          = !string.IsNullOrEmpty(req.CompanyName) ? req.CompanyName : req.ContactName,
+            _Address1      = req.DeliveryAddress,
+            _ZipCode       = req.DeliveryPostcode,
+            _City          = req.DeliveryCity,
+            _Country       = CountryCode.Denmark,
+            _ContactPerson = req.ContactName,
+            _ContactEmail  = req.Email,
+            _MobilPhone    = req.Phone ?? "",
+            _Payment       = req.PaymentCode,
+            _Vat           = "U25",
+            _Group         = req.CustomerType == "privat" ? "PRIV" : "ERHVERV"
+        };
+
+        if (req.CustomerType == "ean" && !string.IsNullOrEmpty(req.Ean))
+            debtor._EAN = req.Ean;
+
+        return debtor;
+    }
+
+    // ---- Order header ----------------------------------------------------------
+
+    private static DebtorOrder BuildOrderHeader(OrderRequest req, string account)
+    {
+        var order = new DebtorOrder
+        {
+            _DCAccount    = account,
+            _OrderNumber  = req.OrderId,
+            _ContactName  = req.ContactName,
+            _Payment      = req.PaymentCode,
+            _Requisition  = $"Webordre: 0{req.OrderId}",
+            _YourRef      = req.ContactName,
+            _SalesValue   = req.TotalPrice,
+            _DeliveryCountry = CountryCode.Denmark
+        };
+
+        if (!string.IsNullOrEmpty(req.Comment))
+            order._Remark = req.Comment;
+
+        if (req.DeliveryType == 2)
+        {
+            // GLS parcel shop
+            order._DeliveryName    = req.DeliveryName;
+            order._DeliveryAddress1 = $"c/o {req.GlsShopName}";
+            order._DeliveryAddress2 = req.GlsShopAddress ?? "";
+            order._DeliveryZipCode  = req.GlsShopPostcode ?? "";
+            order._DeliveryCity     = req.GlsShopCity ?? "";
+        }
+        else
+        {
+            // Home/company address
+            order._DeliveryName    = req.DeliveryName;
+            order._DeliveryAddress1 = $"Att.: {req.DeliveryName}";
+            order._DeliveryAddress2 = req.DeliveryAddress;
+            order._DeliveryZipCode  = req.DeliveryPostcode;
+            order._DeliveryCity     = req.DeliveryCity;
+        }
+
+        return order;
+    }
+
+    // ---- Order line ------------------------------------------------------------
+
+    private static DebtorOrderLine BuildOrderLine(int orderId, OrderItemRequest item)
+    {
+        // SKU in range 700-799 = module, already ex-VAT → full price.
+        // All other items: Magento price is incl. 25% VAT → strip VAT (× 0.8) for Uniconta.
+        var price = IsModulePriced(item.Sku) ? item.Price : item.Price * 0.8;
+
+        return new DebtorOrderLine
+        {
+            _OrderNumber = orderId,
+            _Item        = item.Sku,
+            _Price       = price,
+            _Qty         = item.Qty,
+            _Storage     = StorageRegister.Move
+        };
+    }
+
+    private static bool IsModulePriced(string sku) =>
+        int.TryParse(sku, out var n) && n >= 700 && n <= 799;
+}
