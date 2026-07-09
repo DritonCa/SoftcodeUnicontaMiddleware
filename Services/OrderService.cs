@@ -9,10 +9,12 @@ namespace SoftcodeUnicontaMiddleware.Services;
 public class OrderService
 {
     private readonly ILogger<OrderService> _logger;
+    private readonly IOrderLogger _orderLog;
 
-    public OrderService(ILogger<OrderService> logger)
+    public OrderService(ILogger<OrderService> logger, IOrderLogger orderLog)
     {
-        _logger = logger;
+        _logger   = logger;
+        _orderLog = orderLog;
     }
 
     public async Task ProcessAsync(OrderRequest req, UnicontaServiceClient client)
@@ -23,37 +25,48 @@ public class OrderService
 
             var debtors = await client.GetAllDebtorsAsync();
             var account = FindDebtorAccount(debtors, req);
+            var debtorStatus = "existing";
 
             if (account == null)
             {
-                var debtor = BuildDebtor(req);
+                debtorStatus = "new";
+                var debtor       = BuildDebtor(req);
                 var createResult = await client.CreateDebtorAsync(debtor);
                 if (createResult != ErrorCodes.Succes)
-                    _logger.LogWarning("CreateDebtor returned {Code} for order {OrderId}", createResult, req.OrderId);
+                {
+                    var msg = $"CreateDebtor returned {createResult}";
+                    _logger.LogWarning(msg + " for order {OrderId}", req.OrderId);
+                    _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
+                    return;
+                }
 
-                // Use email (or EAN/CVR) as account key since we just created it
                 account = req.CustomerType == "ean" ? (req.Ean ?? req.Email)
                         : req.CustomerType == "cvr" ? (req.Cvr ?? req.Email)
                         : req.Email;
             }
 
-            var order = BuildOrderHeader(req, account);
+            var order       = BuildOrderHeader(req, account);
             var orderResult = await client.CreateOrderHeaderAsync(order);
             if (orderResult != ErrorCodes.Succes)
             {
-                _logger.LogError("CreateOrderHeader failed {Code} for order {OrderId}", orderResult, req.OrderId);
+                var msg = $"CreateOrderHeader returned {orderResult}";
+                _logger.LogError(msg + " for order {OrderId}", req.OrderId);
+                _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
                 return;
             }
 
-            // Skip shipping if every item is a course or module
             var onlyCourseItems = req.Items.All(i => i.IsCourseOrModule);
 
             foreach (var item in req.Items)
             {
-                var line = BuildOrderLine(req.OrderId, item);
+                var line       = BuildOrderLine(req.OrderId, item);
                 var lineResult = await client.CreateOrderLineAsync(line);
                 if (lineResult != ErrorCodes.Succes)
-                    _logger.LogWarning("CreateOrderLine failed {Code} SKU={Sku} order={OrderId}", lineResult, item.Sku, req.OrderId);
+                {
+                    var warn = $"CreateOrderLine returned {lineResult}";
+                    _logger.LogWarning(warn + " SKU={Sku} order={OrderId}", item.Sku, req.OrderId);
+                    _orderLog.LogLineWarning(req.OrderId, item.Sku, warn);
+                }
             }
 
             if (!onlyCourseItems && req.ShippingAmount > 0)
@@ -68,14 +81,20 @@ public class OrderService
                 };
                 var shResult = await client.CreateOrderLineAsync(shippingLine);
                 if (shResult != ErrorCodes.Succes)
-                    _logger.LogWarning("Shipping line failed {Code} for order {OrderId}", shResult, req.OrderId);
+                {
+                    var warn = $"Shipping line returned {shResult}";
+                    _logger.LogWarning(warn + " for order {OrderId}", req.OrderId);
+                    _orderLog.LogLineWarning(req.OrderId, req.ShippingProductSku, warn);
+                }
             }
 
-            _logger.LogInformation("Uniconta order {OrderId} submitted", req.OrderId);
+            _logger.LogInformation("Uniconta order {OrderId} submitted successfully", req.OrderId);
+            _orderLog.LogSubmitted(req.OrderId, req.CustomerType, req.Email, $"{account} ({debtorStatus})");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Order processing failed for order {OrderId}", req.OrderId);
+            _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message);
         }
     }
 

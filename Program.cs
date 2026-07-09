@@ -72,6 +72,7 @@ builder.Services.AddScoped<IRefreshTokenStore, MemoryRefreshTokenStore>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 builder.Services.AddScoped<SoftcodeUnicontaMiddleware.Services.OrderService>();
+builder.Services.AddSingleton<SoftcodeUnicontaMiddleware.Services.IOrderLogger, SoftcodeUnicontaMiddleware.Services.OrderLogger>();
 
 builder.Services.AddRateLimiter(options =>
 {
