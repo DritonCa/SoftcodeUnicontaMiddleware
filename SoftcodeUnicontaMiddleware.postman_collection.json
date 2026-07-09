@@ -1,0 +1,237 @@
+{
+  "info": {
+    "name": "Softcode Uniconta Middleware",
+    "_postman_id": "softcode-uniconta-middleware",
+    "description": "API for Softcode Uniconta Middleware — auth, products, debtors, orders.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",       "value": "https://localhost:7001", "type": "string" },
+    { "key": "access_token",  "value": "",                       "type": "string" },
+    { "key": "refresh_token", "value": "",                       "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token',  body.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', body.refresh_token);",
+                  "  pm.test('Login successful', () => pm.expect(body.access_token).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userName\": \"apialkalaer\",\n  \"password\": \"10vikali\",\n  \"apiKey\":   \"3e25c817-4749-4113-9bb0-54c684e2b860\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Authenticate with Uniconta credentials. Saves access_token and refresh_token to collection variables automatically."
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('access_token',  body.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', body.refresh_token);",
+                  "  pm.test('Token refreshed', () => pm.expect(body.access_token).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api","auth","refresh"] },
+            "body": {
+              "mode": "raw",
+              "raw": "\"{{refresh_token}}\"",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Rotate access + refresh tokens. Replaces both collection variables."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Get all products (paged)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/uniconta/products?offset=0&limit=100&includeDynamic=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","uniconta","products"],
+              "query": [
+                { "key": "offset",         "value": "0" },
+                { "key": "limit",          "value": "100" },
+                { "key": "includeDynamic", "value": "false" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get single product by SKU",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/uniconta/products/55?includeDynamic=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","uniconta","products","55"],
+              "query": [{ "key": "includeDynamic", "value": "false" }]
+            },
+            "description": "Replace '55' in the URL with the actual product SKU."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Debtors",
+      "item": [
+        {
+          "name": "Get all debtors (paged)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/uniconta/debtors?offset=0&limit=100&includeDynamic=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","uniconta","debtors"],
+              "query": [
+                { "key": "offset",         "value": "0" },
+                { "key": "limit",          "value": "100" },
+                { "key": "includeDynamic", "value": "false" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get single debtor by account",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/uniconta/debtors/D0001?includeDynamic=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","uniconta","debtors","D0001"],
+              "query": [{ "key": "includeDynamic", "value": "false" }]
+            },
+            "description": "Replace 'D0001' with the debtor account number."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Submit order — Privat (hjemmeadresse)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Accepted 202', () => pm.expect(pm.response.code).to.equal(202));",
+                  "pm.test('accepted flag', () => pm.expect(pm.response.json().accepted).to.be.true);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/uniconta/orders", "host": ["{{baseUrl}}"], "path": ["api","uniconta","orders"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1001,\n  \"customerType\": \"privat\",\n  \"email\": \"kunde@example.dk\",\n  \"contactName\": \"Anders Andersen\",\n  \"phone\": \"+4512345678\",\n  \"companyName\": \"\",\n  \"ean\": null,\n  \"cvr\": null,\n  \"comment\": \"Ring venligst inden levering\",\n  \"paymentCode\": \"Dankort\",\n  \"deliveryType\": 1,\n  \"deliveryName\": \"Anders Andersen\",\n  \"deliveryAddress\": \"Blomstervej 12\",\n  \"deliveryPostcode\": \"8000\",\n  \"deliveryCity\": \"Aarhus C\",\n  \"glsShopName\": null,\n  \"glsShopAddress\": null,\n  \"glsShopPostcode\": null,\n  \"glsShopCity\": null,\n  \"totalPrice\": 1124.00,\n  \"shippingAmount\": 49.00,\n  \"shippingProductSku\": \"860\",\n  \"items\": [\n    {\n      \"sku\": \"55\",\n      \"name\": \"Spil til klassen\",\n      \"price\": 875.00,\n      \"qty\": 1,\n      \"isCourseOrModule\": false\n    },\n    {\n      \"sku\": \"720\",\n      \"name\": \"Alkalær Modul — Matematik\",\n      \"price\": 200.00,\n      \"qty\": 1,\n      \"isCourseOrModule\": true\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Private customer, home address delivery. Payment code comes from Magento config (default: Dankort). Mixed order (not only courses) → shipping line will be added in Uniconta."
+          }
+        },
+        {
+          "name": "Submit order — CVR firma (GLS pakkeshop)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Accepted 202', () => pm.expect(pm.response.code).to.equal(202));",
+                  "pm.test('accepted flag', () => pm.expect(pm.response.json().accepted).to.be.true);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/uniconta/orders", "host": ["{{baseUrl}}"], "path": ["api","uniconta","orders"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1002,\n  \"customerType\": \"cvr\",\n  \"email\": \"indkob@firma.dk\",\n  \"contactName\": \"Bente Sørensen\",\n  \"phone\": \"+4587654321\",\n  \"companyName\": \"Firma A/S\",\n  \"ean\": null,\n  \"cvr\": \"12345678\",\n  \"comment\": null,\n  \"paymentCode\": \"NK8\",\n  \"deliveryType\": 2,\n  \"deliveryName\": \"Bente Sørensen\",\n  \"deliveryAddress\": \"Firmavej 1\",\n  \"deliveryPostcode\": \"9000\",\n  \"deliveryCity\": \"Aalborg\",\n  \"glsShopName\": \"Kvickly Aalborg\",\n  \"glsShopAddress\": \"Vesterbro 100\",\n  \"glsShopPostcode\": \"9000\",\n  \"glsShopCity\": \"Aalborg\",\n  \"totalPrice\": 2498.75,\n  \"shippingAmount\": 39.00,\n  \"shippingProductSku\": \"860\",\n  \"items\": [\n    {\n      \"sku\": \"42\",\n      \"name\": \"Klassesæt — 30 stk\",\n      \"price\": 2459.75,\n      \"qty\": 1,\n      \"isCourseOrModule\": false\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "CVR company customer, GLS parcel shop delivery (deliveryType=2). Payment code NK8 (existing debtor). GLS shop fields are used for DeliveryAddress in Uniconta."
+          }
+        },
+        {
+          "name": "Submit order — EAN faktura (kun kurser)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Accepted 202', () => pm.expect(pm.response.code).to.equal(202));",
+                  "pm.test('accepted flag', () => pm.expect(pm.response.json().accepted).to.be.true);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/uniconta/orders", "host": ["{{baseUrl}}"], "path": ["api","uniconta","orders"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": 1003,\n  \"customerType\": \"ean\",\n  \"email\": \"faktura@kommune.dk\",\n  \"contactName\": \"Skole Nord\",\n  \"phone\": \"+4576543210\",\n  \"companyName\": \"Kommune Nord\",\n  \"ean\": \"5798000123456\",\n  \"cvr\": null,\n  \"comment\": \"EAN faktura\",\n  \"paymentCode\": \"NK15\",\n  \"deliveryType\": 1,\n  \"deliveryName\": \"Skole Nord\",\n  \"deliveryAddress\": \"Skolevej 5\",\n  \"deliveryPostcode\": \"6000\",\n  \"deliveryCity\": \"Kolding\",\n  \"glsShopName\": null,\n  \"glsShopAddress\": null,\n  \"glsShopPostcode\": null,\n  \"glsShopCity\": null,\n  \"totalPrice\": 1600.00,\n  \"shippingAmount\": 0.00,\n  \"shippingProductSku\": \"860\",\n  \"items\": [\n    {\n      \"sku\": \"720\",\n      \"name\": \"Alkalær Modul — Dansk\",\n      \"price\": 800.00,\n      \"qty\": 2,\n      \"isCourseOrModule\": true\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "EAN invoice order with only course/module items. Since all items have isCourseOrModule=true, the shipping line (SKU 860) is NOT added to Uniconta. Payment code NK15."
+          }
+        }
+      ]
+    }
+  ]
+}
