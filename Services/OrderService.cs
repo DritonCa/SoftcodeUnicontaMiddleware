@@ -1,4 +1,5 @@
 using SoftcodeUnicontaMiddleware.Models.Orders;
+using OrderResult = SoftcodeUnicontaMiddleware.Models.Orders.OrderResult;
 using SoftcodeUnicontaMiddleware.UnicontaService;
 using Uniconta.ClientTools.DataModel;
 using Uniconta.Common;
@@ -17,7 +18,7 @@ public class OrderService
         _orderLog = orderLog;
     }
 
-    public async Task ProcessAsync(OrderRequest req, UnicontaServiceClient client)
+    public async Task<OrderResult> ProcessAsync(OrderRequest req, UnicontaServiceClient client)
     {
         try
         {
@@ -37,7 +38,7 @@ public class OrderService
                     var msg = $"CreateDebtor returned {createResult}";
                     _logger.LogWarning(msg + " for order {OrderId}", req.OrderId);
                     _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
-                    return;
+                    return new OrderResult { Success = false, Message = msg };
                 }
 
                 account = req.CustomerType == "ean" ? (req.Ean ?? req.Email)
@@ -52,7 +53,7 @@ public class OrderService
                 var msg = $"CreateOrderHeader returned {orderResult}";
                 _logger.LogError(msg + " for order {OrderId}", req.OrderId);
                 _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
-                return;
+                return new OrderResult { Success = false, Message = msg };
             }
 
             var onlyCourseItems = req.Items.All(i => i.IsCourseOrModule);
@@ -90,11 +91,13 @@ public class OrderService
 
             _logger.LogInformation("Uniconta order {OrderId} submitted successfully", req.OrderId);
             _orderLog.LogSubmitted(req.OrderId, req.CustomerType, req.Email, $"{account} ({debtorStatus})");
+            return new OrderResult { Success = true, Message = $"Order submitted to debtor {account} ({debtorStatus})" };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Order processing failed for order {OrderId}", req.OrderId);
             _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message);
+            return new OrderResult { Success = false, Message = ex.Message };
         }
     }
 

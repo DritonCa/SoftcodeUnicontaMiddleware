@@ -26,8 +26,8 @@ public class OrdersController : ControllerBase
     }
 
     /// <summary>
-    /// Receive a Magento order and push it to Uniconta asynchronously.
-    /// Returns 202 Accepted immediately; processing happens in a background thread.
+    /// Receive a Magento order and push it to Uniconta synchronously.
+    /// Returns 200 OK on success, 422 Unprocessable on Uniconta failure.
     /// </summary>
     [HttpPost]
     public async Task<IActionResult> Submit([FromBody] OrderRequest request)
@@ -38,8 +38,6 @@ public class OrdersController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Email))
             return BadRequest(new OrderResponse { Message = "Email is required" });
 
-        // Initialize Uniconta client NOW while we still have the JWT HTTP context.
-        // The factory reads claims from the current request — cannot be called after response.
         UnicontaServiceClient client;
         try
         {
@@ -50,25 +48,15 @@ public class OrdersController : ControllerBase
             return Unauthorized(new OrderResponse { Message = ex.Message });
         }
 
-        // Fire and forget — Uniconta API calls can be slow; don't block the caller.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _orderService.ProcessAsync(request, client);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unhandled error processing order {OrderId}", request.OrderId);
-            }
-        });
+        var result = await _orderService.ProcessAsync(request, client);
 
-        _logger.LogInformation("Order {OrderId} accepted for Uniconta submission", request.OrderId);
-
-        return Accepted(new OrderResponse
+        if (result.Success)
         {
-            Accepted = true,
-            Message  = $"Order {request.OrderId} queued for Uniconta submission"
-        });
+            _logger.LogInformation("Order {OrderId} submitted to Uniconta successfully", request.OrderId);
+            return Ok(new OrderResponse { Accepted = true, Message = result.Message });
+        }
+
+        _logger.LogWarning("Order {OrderId} failed Uniconta submission: {Message}", request.OrderId, result.Message);
+        return UnprocessableEntity(new OrderResponse { Accepted = false, Message = result.Message });
     }
 }
