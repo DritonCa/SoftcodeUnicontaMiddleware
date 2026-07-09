@@ -98,7 +98,7 @@ public class OrderService
                 }
             }
 
-            if (req.CustomerType == "privat" && createdLines.Count > 0)
+            if (createdLines.Count > 0)
             {
                 var invoiceResult = await client.PostInvoiceAsync(order, createdLines.ToArray());
                 if (invoiceResult == null || invoiceResult.Err != ErrorCodes.Succes)
