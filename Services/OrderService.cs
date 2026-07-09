@@ -57,6 +57,7 @@ public class OrderService
             }
 
             var onlyCourseItems = req.Items.All(i => i.IsCourseOrModule);
+            var createdLines    = new List<DebtorOrderLineClient>();
 
             foreach (var item in req.Items)
             {
@@ -68,11 +69,15 @@ public class OrderService
                     _logger.LogWarning(warn + " SKU={Sku} order={OrderId}", item.Sku, req.OrderId);
                     _orderLog.LogLineWarning(req.OrderId, item.Sku, warn);
                 }
+                else
+                {
+                    createdLines.Add(line);
+                }
             }
 
             if (!onlyCourseItems && req.ShippingAmount > 0)
             {
-                var shippingLine = new DebtorOrderLine
+                var shippingLine = new DebtorOrderLineClient
                 {
                     _OrderNumber = req.OrderId,
                     _Item        = req.ShippingProductSku,
@@ -86,6 +91,25 @@ public class OrderService
                     var warn = $"Shipping line returned {shResult}";
                     _logger.LogWarning(warn + " for order {OrderId}", req.OrderId);
                     _orderLog.LogLineWarning(req.OrderId, req.ShippingProductSku, warn);
+                }
+                else
+                {
+                    createdLines.Add(shippingLine);
+                }
+            }
+
+            if (req.CustomerType == "privat" && createdLines.Count > 0)
+            {
+                var invoiceResult = await client.PostInvoiceAsync(order, createdLines.ToArray());
+                if (invoiceResult == null || invoiceResult.Err != ErrorCodes.Succes)
+                {
+                    var warn = $"PostInvoice returned {invoiceResult?.Err}";
+                    _logger.LogWarning(warn + " for order {OrderId}", req.OrderId);
+                    _orderLog.LogLineWarning(req.OrderId, "INVOICE", warn);
+                }
+                else
+                {
+                    _logger.LogInformation("Invoice posted in Uniconta for order {OrderId}", req.OrderId);
                 }
             }
 
@@ -143,9 +167,9 @@ public class OrderService
 
     // ---- Order header ----------------------------------------------------------
 
-    private static DebtorOrder BuildOrderHeader(OrderRequest req, string account)
+    private static DebtorOrderClient BuildOrderHeader(OrderRequest req, string account)
     {
-        var order = new DebtorOrder
+        var order = new DebtorOrderClient
         {
             _DCAccount    = account,
             _OrderNumber  = req.OrderId,
@@ -184,7 +208,7 @@ public class OrderService
 
     // ---- Order line ------------------------------------------------------------
 
-    private static DebtorOrderLine BuildOrderLine(int orderId, OrderItemRequest item, bool pricesIncludeTax)
+    private static DebtorOrderLineClient BuildOrderLine(int orderId, OrderItemRequest item, bool pricesIncludeTax)
     {
         // Modules (SKU 700-799) are always stored ex-VAT — use price as-is.
         // Other items: if Magento sends incl. VAT (25% DK), strip it here so Uniconta receives ex-VAT.
@@ -194,7 +218,7 @@ public class OrderService
         else
             price = pricesIncludeTax ? item.Price * 0.8 : item.Price;
 
-        return new DebtorOrderLine
+        return new DebtorOrderLineClient
         {
             _OrderNumber = orderId,
             _Item        = item.Sku,

@@ -344,18 +344,26 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             return await crud.Insert(debtor);
         }
 
-        public async Task<ErrorCodes> CreateOrderHeaderAsync(DebtorOrder order)
+        public async Task<ErrorCodes> CreateOrderHeaderAsync(DebtorOrderClient order)
         {
             EnsureInit();
             var crud = new CrudAPI(_session, _company);
             return await crud.Insert(order);
         }
 
-        public async Task<ErrorCodes> CreateOrderLineAsync(DebtorOrderLine line)
+        public async Task<ErrorCodes> CreateOrderLineAsync(DebtorOrderLineClient line)
         {
             EnsureInit();
             var crud = new CrudAPI(_session, _company);
             return await crud.Insert(line);
+        }
+
+        public async Task<InvoicePostingResult> PostInvoiceAsync(DebtorOrderClient order, DebtorOrderLineClient[] lines)
+        {
+            EnsureInit();
+            var crud = new CrudAPI(_session, _company);
+            var iapi = new InvoiceAPI(crud);
+            return await iapi.PostInvoice(order, lines, DateTime.Now, 0, false);
         }
     }
 }
