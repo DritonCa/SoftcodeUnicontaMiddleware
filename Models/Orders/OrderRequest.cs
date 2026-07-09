@@ -39,8 +39,14 @@ public class OrderRequest
     public double TotalPrice { get; set; }
     public double ShippingAmount { get; set; }
 
-    /// <summary>SKU of the Uniconta shipping product (default: "860")</summary>
-    public string ShippingProductSku { get; set; } = "860";
+    /// <summary>SKU of the Uniconta shipping product (configured in Magento admin)</summary>
+    public string ShippingProductSku { get; set; } = "8000";
+
+    /// <summary>
+    /// True when Magento sends prices incl. 25% DK VAT → middleware strips × 0.8.
+    /// False when Magento sends prices excl. VAT → middleware uses price as-is.
+    /// </summary>
+    public bool PricesIncludeTax { get; set; } = true;
 
     public List<OrderItemRequest> Items { get; set; } = new();
 }

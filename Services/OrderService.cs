@@ -60,7 +60,7 @@ public class OrderService
 
             foreach (var item in req.Items)
             {
-                var line       = BuildOrderLine(req.OrderId, item);
+                var line       = BuildOrderLine(req.OrderId, item, req.PricesIncludeTax);
                 var lineResult = await client.CreateOrderLineAsync(line);
                 if (lineResult != ErrorCodes.Succes)
                 {
@@ -184,11 +184,15 @@ public class OrderService
 
     // ---- Order line ------------------------------------------------------------
 
-    private static DebtorOrderLine BuildOrderLine(int orderId, OrderItemRequest item)
+    private static DebtorOrderLine BuildOrderLine(int orderId, OrderItemRequest item, bool pricesIncludeTax)
     {
-        // SKU in range 700-799 = module, already ex-VAT → full price.
-        // All other items: Magento price is incl. 25% VAT → strip VAT (× 0.8) for Uniconta.
-        var price = IsModulePriced(item.Sku) ? item.Price : item.Price * 0.8;
+        // Modules (SKU 700-799) are always stored ex-VAT — use price as-is.
+        // Other items: if Magento sends incl. VAT (25% DK), strip it here so Uniconta receives ex-VAT.
+        double price;
+        if (IsModulePriced(item.Sku))
+            price = item.Price;
+        else
+            price = pricesIncludeTax ? item.Price * 0.8 : item.Price;
 
         return new DebtorOrderLine
         {
