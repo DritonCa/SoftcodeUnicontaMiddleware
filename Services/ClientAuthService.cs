@@ -1,18 +1,18 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SoftcodeUnicontaMiddleware.Data;
 using SoftcodeUnicontaMiddleware.Data.Entities;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace SoftcodeUnicontaMiddleware.Services
 {
     public class ClientAuthService : IClientAuthService
     {
         private readonly AppDbContext _db;
+        private readonly SecretHasher _hasher;
 
-        public ClientAuthService(AppDbContext db)
+        public ClientAuthService(AppDbContext db, SecretHasher hasher)
         {
             _db = db;
+            _hasher = hasher;
         }
 
         public async Task<ApiClient?> ValidateAsync(
@@ -33,22 +33,8 @@ namespace SoftcodeUnicontaMiddleware.Services
             if (client == null)
                 return null;
 
-            var incomingHash = Hash(clientSecret);
-
-            if (!CryptographicOperations.FixedTimeEquals(
-                    Convert.FromHexString(client.ClientSecretHash),
-                    Convert.FromHexString(incomingHash)))
-                return null;
-
-            return client;
-        }
-
-        private static string Hash(string value)
-        {
-            using var sha = SHA256.Create();
-            return Convert.ToHexString(
-                sha.ComputeHash(Encoding.UTF8.GetBytes(value))
-            );
+            // Constant-time HMAC verification (see SecretHasher).
+            return _hasher.Verify(clientSecret, client.ClientSecretHash) ? client : null;
         }
     }
 }

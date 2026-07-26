@@ -51,12 +51,18 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddScoped<UnicontaServiceClientFactory>();
 
+// Connection string comes from configuration (appsettings / env / user-secrets),
+// falling back to a local dev SQLite file. Never hard-code infrastructure paths.
+var connectionString = builder.Configuration.GetConnectionString("AppDb")
+    ?? "Data Source=softcode_api.db";
+
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options.UseSqlite("Data Source=softcode_api.db");
+    options.UseSqlite(connectionString);
 });
 
 
+builder.Services.AddSingleton<SecretHasher>();
 builder.Services.AddScoped<IClientAuthService, ClientAuthService>();
 builder.Services.AddScoped<ClientAuthFilter>();
 builder.Services.AddScoped<JwtTokenService>();
@@ -69,7 +75,7 @@ builder.Services
             "dataprotection-keys")))
     .SetApplicationName("SoftcodeUnicontaMiddleware");
 builder.Services.AddScoped<IRefreshTokenStore, MemoryRefreshTokenStore>();
-builder.Services.AddHttpContextAccessor();
+// NOTE: AddHttpContextAccessor() is already registered above (line ~25); duplicate removed.
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 builder.Services.AddScoped<SoftcodeUnicontaMiddleware.Services.OrderService>();
 builder.Services.AddSingleton<SoftcodeUnicontaMiddleware.Services.IOrderLogger, SoftcodeUnicontaMiddleware.Services.OrderLogger>();
@@ -122,8 +128,9 @@ app.MapControllers();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Data.AppDbContext>();
+    var hasher = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Services.SecretHasher>();
     db.Database.Migrate();
-    SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db);
+    SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db, hasher);
 }
 
 app.Run();

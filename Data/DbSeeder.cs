@@ -1,12 +1,11 @@
 ﻿using SoftcodeUnicontaMiddleware.Data.Entities;
-using System.Security.Cryptography;
-using System.Text;
+using SoftcodeUnicontaMiddleware.Services;
 
 namespace SoftcodeUnicontaMiddleware.Data
 {
     public static class DbSeeder
     {
-        public static void Seed(AppDbContext db)
+        public static void Seed(AppDbContext db, SecretHasher hasher)
         {
             // Prevent double-seeding
             if (db.Tenants.Any())
@@ -29,7 +28,7 @@ namespace SoftcodeUnicontaMiddleware.Data
                 Id = Guid.NewGuid(),
                 TenantId = tenant.Id,
                 ClientId = "demo-client",
-                ClientSecretHash = Hash(clientSecret),
+                ClientSecretHash = hasher.Hash(clientSecret),
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
@@ -42,14 +41,6 @@ namespace SoftcodeUnicontaMiddleware.Data
             Console.WriteLine("==== API CLIENT SEEDED ====");
             Console.WriteLine($"ClientId: demo-client");
             Console.WriteLine($"ClientSecret: {clientSecret}");
-        }
-
-        private static string Hash(string value)
-        {
-            using var sha = SHA256.Create();
-            return Convert.ToHexString(
-                sha.ComputeHash(Encoding.UTF8.GetBytes(value))
-            );
         }
     }
 }
