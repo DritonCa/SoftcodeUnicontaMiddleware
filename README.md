@@ -1,306 +1,148 @@
 # Softcode Uniconta Middleware
 
-**Softcode Uniconta Middleware** is an **ASP.NET Core (.NET 8)** API that exposes **Uniconta ERP data** through a **secure, CMS-friendly, headless REST API**.
+A small **ASP.NET Core (.NET 8)** web API that sits between your webshop / CMS and
+**Uniconta ERP**. It turns Uniconta's SOAP SDK into a clean, secured REST API so a
+storefront never talks to the ERP directly.
 
-It is designed as a **generic ERP → CMS / platform integration layer** with:
-
-- Explicit, stable DTOs  
-- Secure authentication (Client Credentials + JWT)  
-- Refresh tokens  
-- Rate limiting  
-- Caching  
-- Stateless, scalable architecture  
+Built for a headless Magento store, but the API is generic and works with any
+client that can send an HTTP request.
 
 ---
 
-## 🎯 Purpose
+## Why it exists
 
-Uniconta’s SDK is powerful, but **not suitable to expose directly** to external systems.
+Uniconta's SDK is powerful but not something you want to expose to the public
+internet: it returns rich object graphs, needs ERP credentials on every call, and
+has no rate limiting or access control of its own. This middleware wraps it and adds:
 
-This middleware:
-
-- Translates Uniconta SDK data into **safe, stable DTOs**
-- Prevents SDK object graph leaks
-- Supports **batch sync**, **range loading**, and **incremental access**
-- Protects Uniconta against abuse and credential leakage
-- Works with **any CMS, headless frontend, or BI system**
-
-Typical consumers:
-
-- CMS systems  
-- Headless storefronts  
-- Power BI  
-- Custom backend services  
+- **Stable DTOs** instead of raw SDK objects (no accidental data leaks, no circular graphs)
+- **Two-step authentication** — client credentials to log in, short-lived JWTs for every call
+- **Credential protection** — Uniconta passwords are encrypted in memory, never returned, never put in a token
+- **Rate limiting** on the sensitive login endpoint
+- **In-memory caching** to keep ERP load down
 
 ---
 
-## 🧱 Architecture Overview
+## How authentication works
 
-Client / CMS / BI
-↓
-Client-ID + Client-Secret
-↓
-Auth API (JWT + Refresh Token)
-↓
-Softcode Uniconta Middleware
-↓
-Uniconta SDK
+Authentication is **token-based**, in two steps:
 
-markdown
-Copy code
+```
+1. Client  ──  X-Client-Id + X-Client-Secret  ──▶  POST /api/auth/login
+                                                    (verifies client, logs in to Uniconta)
+2. Client  ◀──  short-lived JWT + refresh token  ──
 
-### Key principles
+3. Client  ──  Authorization: Bearer <JWT>  ──▶  /api/uniconta/*
+```
 
-- **Stateless API** (no server-side sessions)
-- **JWT-based authentication**
-- **Short-lived access tokens**
-- **Encrypted credential cache**
-- **Explicit DTOs only**
-- **Batch-first design**
+- **Client secrets** are stored as a **keyed HMAC-SHA256 hash** (with a server-side
+  "pepper" from configuration) and compared in **constant time** — a leaked database
+  alone cannot be used to recover or brute-force them.
+- **JWTs** are short-lived; **refresh tokens** are server-stored, rotated on use, and revocable.
+- The Uniconta password is used once at login and cached **encrypted** with a TTL.
 
 ---
 
-## 🔐 Authentication Model
+## API reference
 
-Authentication is **token-based**, not session-based.
+All `api/uniconta/*` endpoints require a valid `Authorization: Bearer <JWT>` header.
 
-### 1️⃣ Client Authentication (API access)
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/auth/login` | Exchange client credentials for a JWT + refresh token |
+| `POST` | `/api/auth/refresh` | Rotate an expired JWT using a refresh token |
+| `GET`  | `/api/uniconta/products` | List products (`?offset=&limit=&includeDynamic=`) |
+| `GET`  | `/api/uniconta/products/{sku}` | A single product |
+| `GET`  | `/api/uniconta/debtors` | List debtors/customers (`?offset=&limit=&includeDynamic=`) |
+| `GET`  | `/api/uniconta/debtors/{account}` | A single debtor |
+| `POST` | `/api/uniconta/orders` | Push a webshop order into Uniconta |
+| `POST` | `/api/uniconta/orders/{orderNumber}/invoice` | Invoice an existing order |
 
-Each consumer gets its own credentials:
+`includeDynamic=true` adds extra flat ERP fields under an `extensions` object
+(primitives only — no nested SDK objects).
 
-- `X-Client-Id`
-- `X-Client-Secret`
+### Error responses
 
-These are:
+| Situation | Status |
+| --- | --- |
+| Missing/invalid client credentials | `401 Unauthorized` |
+| Missing/expired/invalid JWT | `401 Unauthorized` |
+| Entity not found | `404 Not Found` |
+| Login rate limit exceeded | `429 Too Many Requests` |
+| Uniconta rejected the operation | `422 Unprocessable Entity` |
+| Unexpected error | `500 Internal Server Error` |
 
-- Stored **hashed** in the database
-- Used **only** to access `/api/auth/login`
-- Never reused after login
+Errors are shaped by a global exception middleware; internal details are logged
+server-side, never returned to the caller.
 
 ---
 
-### 2️⃣ Login (Uniconta authentication)
+## Getting started
 
-**Endpoint**
+**Prerequisites:** .NET 8 SDK, and Uniconta API credentials.
 
-POST /api/auth/login
+```bash
+git clone git@github.com:DritonCa/SoftcodeUnicontaMiddleware.git
+cd SoftcodeUnicontaMiddleware
 
-markdown
-Copy code
+# real secrets go in appsettings.Development.json (git-ignored), not appsettings.json
+dotnet restore
+dotnet run
+```
 
-**Headers**
+Then open `https://localhost:5001/swagger` for the interactive API explorer.
 
-X-Client-Id: your-client-id
-X-Client-Secret: your-client-secret
-Content-Type: application/json
+On first run the app creates a local SQLite database and seeds one demo API client
+(the client id + secret are printed to the console).
 
-{
-  "userName": "api@company.dk",
-  "password": "UNICONTA_PASSWORD",
-  "apiKey": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-}
-Response
-
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "refresh_token": "long_random_string",
-  "token_type": "Bearer"
-}
+### Configuration
 
+`appsettings.json` ships with placeholders; put real values in the git-ignored
+`appsettings.Development.json` / `appsettings.Production.json`, environment
+variables, or user-secrets:
 
-Important notes
+| Key | Meaning |
+| --- | --- |
+| `Jwt:Key` | Signing key for JWTs (long random string) |
+| `Jwt:Issuer` / `Jwt:Audience` | JWT validation values |
+| `Auth:SecretPepper` | Server-side key used to HMAC client secrets |
+| `Uniconta:ApiKey` / `Username` / `Password` | Uniconta ERP credentials |
+| `ConnectionStrings:AppDb` | Optional; overrides the default local SQLite file |
 
-Uniconta password is used once
+---
 
-Password is never stored in JWT
+## Testing
 
-Password is cached encrypted with TTL
+```bash
+dotnet test
+```
 
-Client secrets are never returned
+The `Tests/` project (xUnit) covers the security core — HMAC hashing and client
+authentication (correct/incorrect secret, unknown/inactive client, inactive tenant,
+empty input) using an in-memory database. CI (`.github/workflows/ci.yml`) runs
+`build` + `test` on every push and pull request.
 
-# 3️⃣ Accessing protected endpoints
-All API endpoints require a valid Bearer token:
+---
 
-makefile
-Copy code
-Authorization: Bearer <access_token>
-# 4️⃣ Refresh token flow
-When the access token expires:
+## Architecture at a glance
 
-bash
-Copy code
-POST /api/auth/refresh
-Body
+```
+Webshop / CMS ─▶ AuthController ─▶ ClientAuthService ─▶ SQLite (clients, tenants)
+                      │  issues JWT
+Webshop / CMS ─▶ OrdersController ─▶ OrderService ─▶ Uniconta SOAP client
+                                          └─▶ audit log
+```
 
-json
-Copy code
-"refresh_token_here"
-A new access token and rotated refresh token are returned.
+- **Stateless** — no server-side session; every call carries its own JWT.
+- **Layered** — thin controllers, business logic in services, ERP access isolated
+  behind a client factory, EF Core for persistence.
+- **DI-first** — everything is registered in `Program.cs` and injected via constructors.
 
-Refresh tokens are server-stored
+**Tech:** .NET 8 · ASP.NET Core · Uniconta .NET SDK · EF Core (SQLite) ·
+ASP.NET Data Protection · JWT + refresh tokens · built-in rate limiter · `IMemoryCache`.
 
-Rotated on use
+---
 
-Revocable
+## License
 
-Ready for Redis / DB persistence
-
-# 📦 Products API
-List / Range / Batch
-bash
-Copy code
-GET /api/uniconta/products
-Query parameters
-
-Name	Type	Default	Description
-offset	int	0	Start index
-limit	int	100	Number of items
-includeDynamic	bool	false	Include dynamic ERP fields
-
-Example
-
-pgsql
-Copy code
-GET /api/uniconta/products?offset=0&limit=50
-Single Product
-swift
-Copy code
-GET /api/uniconta/products/{sku}
-Optional:
-
-ruby
-Copy code
-?includeDynamic=true
-# 👤 Debtors (Customers) API
-List / Batch
-bash
-Copy code
-GET /api/uniconta/debtors
-Query parameters
-
-Name	Type	Default
-offset	int	0
-limit	int	100
-includeDynamic	bool	false
-
-Single Debtor
-swift
-Copy code
-GET /api/uniconta/debtors/{account}
-# 🧬 Dynamic Fields (includeDynamic=true)
-When enabled, additional ERP fields are returned under extensions.
-
-Example:
-
-json
-Copy code
-"extensions": {
-  "_Account": "10000",
-  "_Blocked": false,
-  "_Group": "DK",
-  "_CreditMax": 50000
-}
-Guarantees
-Flat structure only
-
-Safe primitive values
-
-No nested SDK objects
-
-No circular references
-
-Serializer-safe
-
-# 🧪 Debug Endpoints (Internal Use Only)
-swift
-Copy code
-GET /api/debug/uniconta/debtors
-GET /api/debug/uniconta/products/prod
-GET /api/debug/uniconta/products/inv
-⚠️ Do not expose publicly
-
-# 🚦 Rate Limiting
-Global rate limiting is enabled:
-
-30 requests per 10 seconds
-
-Per IP address
-
-Sliding window
-
-No queue
-
-Excess requests return:
-
-nginx
-Copy code
-HTTP 429 Too Many Requests
-⚡ Caching Strategy
-In-memory caching is used to:
-
-Reduce Uniconta load
-
-Speed up batch and range queries
-
-Cache expensive lookups
-
-Cache keys are:
-
-Tenant-scoped (CompanyId)
-
-Versioned using dataset fingerprints
-
-Offset + limit aware
-
-No timestamps are relied on.
-
-# 🛡 Error Handling
-Scenario	Response
-Invalid client credentials	401 Unauthorized
-Invalid or expired token	401 Unauthorized
-Entity not found	404 Not Found
-Rate limit exceeded	429 Too Many Requests
-Internal error	500 Internal Server Error
-
-Controllers never rely on session state.
-
-# 🧰 Tech Stack
-.NET 8
-
-ASP.NET Core
-
-Uniconta SDK
-
-Entity Framework Core (SQLite)
-
-IMemoryCache
-
-ASP.NET Core Data Protection
-
-JWT + Refresh Tokens
-
-Built-in ASP.NET Rate Limiter
-
-SSH-based GitHub workflow
-
-# 🚀 Current Status
-✔ Client-ID + Client-Secret authentication
-
-✔ JWT access tokens
-
-✔ Refresh tokens (rotating)
-
-✔ Encrypted Uniconta credential cache
-
-✔ Products: batch + single
-
-✔ Debtors: batch + single
-
-✔ Dynamic fields (safe)
-
-✔ Rate limiting
-
-✔ Caching
-
-✔ Stateless architecture
-
+MIT — see [LICENSE](LICENSE).
