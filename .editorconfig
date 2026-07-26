@@ -1,0 +1,19 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.cs]
+indent_size = 4
+dotnet_sort_system_directives_first = true
+csharp_style_namespace_declarations = file_scoped:suggestion
+dotnet_diagnostic.CA2100.severity = warning   # SQL injection review
+dotnet_diagnostic.CA5350.severity = warning   # weak crypto
+dotnet_diagnostic.CA5351.severity = warning   # broken crypto
+
+[*.{json,yml,yaml}]
+indent_size = 2

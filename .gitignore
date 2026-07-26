@@ -8,7 +8,9 @@ obj/
 *.suo
 *.cache
 *.log
-
+*.tmp
+*.db
+*.sln
 ## Rider
 .idea/
 
@@ -19,3 +21,6 @@ Thumbs.db
 ## Secrets
 appsettings.Development.json
 appsettings.Production.json
+
+dataprotection-keys/
+
