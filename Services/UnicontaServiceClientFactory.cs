@@ -24,10 +24,11 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
         {
             var user = _http.HttpContext!.User;
 
+            // The JWT only identifies the caller (username + companyId). The actual
+            // Uniconta secrets are fetched from the server-side credential store, so
+            // they are never transported inside the token.
             var username = user.FindFirst("username")?.Value;
-            var apiKey = user.FindFirst("apiKey")?.Value;
             var companyId = int.Parse(user.FindFirst("companyId")!.Value);
-
 
             var credentials = _store.Get(username!, companyId)
                 ?? throw new UnauthorizedAccessException(
@@ -35,7 +36,7 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
 
             var client = new UnicontaServiceClient(
                 credentials.Username,
-                credentials.EncryptedPassword, // already decrypted
+                credentials.EncryptedPassword, // decrypted by the store on read
                 credentials.ApiKey,
                 _cache
             );

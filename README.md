@@ -123,10 +123,22 @@ variables, or user-secrets:
 dotnet test
 ```
 
-The `Tests/` project (xUnit) covers the security core — HMAC hashing and client
-authentication (correct/incorrect secret, unknown/inactive client, inactive tenant,
-empty input) using an in-memory database. CI (`.github/workflows/ci.yml`) runs
-`build` + `test` on every push and pull request.
+The `Tests/` project (xUnit) covers the security core:
+
+- **Client secret hashing** — deterministic hash, constant-time verify, pepper
+  isolation, malformed-input handling (`SecretHasherTests`).
+- **Client authentication** — correct/incorrect secret, unknown/inactive client,
+  inactive tenant, empty input, over an in-memory database (`ClientAuthServiceTests`).
+- **Access tokens** — the JWT carries `username` + `companyId` and never a
+  credential claim (`JwtTokenServiceTests`).
+- **Refresh tokens** — rotation/revocation and hash-at-rest, i.e. the raw token is
+  never used as a cache key (`MemoryRefreshTokenStoreTests`).
+- **Credential store** — encrypted round-trip and idempotent reads, so the factory
+  can resolve credentials on every request (`MemoryUnicontaCredentialStoreTests`).
+
+CI (`.github/workflows/ci.yml`) runs `build` + `test` on every push and pull request.
+
+See [SECURITY.md](SECURITY.md) for the full threat model and secret-handling design.
 
 ---
 
