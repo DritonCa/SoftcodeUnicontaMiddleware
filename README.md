@@ -27,12 +27,18 @@ has no rate limiting or access control of its own. This middleware wraps it and 
 
 Authentication is **token-based**, in two steps:
 
-```
-1. Client  ──  X-Client-Id + X-Client-Secret  ──▶  POST /api/auth/login
-                                                    (verifies client, logs in to Uniconta)
-2. Client  ◀──  short-lived JWT + refresh token  ──
-
-3. Client  ──  Authorization: Bearer <JWT>  ──▶  /api/uniconta/*
+```mermaid
+sequenceDiagram
+    participant C as Client / CMS
+    participant A as Auth API
+    participant DB as SQLite
+    participant U as Uniconta
+    C->>A: POST /api/auth/login (X-Client-Id, X-Client-Secret)
+    A->>DB: verify client (HMAC, constant-time)
+    A->>U: log in with Uniconta credentials
+    A-->>C: short-lived JWT + refresh token
+    C->>A: /api/uniconta/* (Authorization: Bearer <JWT>)
+    A-->>C: data
 ```
 
 - **Client secrets** are stored as a **keyed HMAC-SHA256 hash** (with a server-side
@@ -126,11 +132,14 @@ empty input) using an in-memory database. CI (`.github/workflows/ci.yml`) runs
 
 ## Architecture at a glance
 
-```
-Webshop / CMS ─▶ AuthController ─▶ ClientAuthService ─▶ SQLite (clients, tenants)
-                      │  issues JWT
-Webshop / CMS ─▶ OrdersController ─▶ OrderService ─▶ Uniconta SOAP client
-                                          └─▶ audit log
+```mermaid
+flowchart LR
+    W["Webshop / CMS"] -->|"client creds"| AC["AuthController"]
+    AC --> CAS["ClientAuthService"] --> DB[("SQLite<br/>clients · tenants")]
+    AC -->|"JWT"| W
+    W -->|"Bearer JWT"| OC["OrdersController"]
+    OC --> OS["OrderService"] --> U["Uniconta SOAP client"]
+    OC --> L["Audit log"]
 ```
 
 - **Stateless** — no server-side session; every call carries its own JWT.
