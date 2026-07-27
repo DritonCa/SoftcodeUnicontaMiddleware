@@ -23,9 +23,12 @@ namespace SoftcodeUnicontaMiddleware.Services
             return Convert.ToBase64String(bytes);
         }
 
+        // The access token carries only a non-secret identity (username + companyId).
+        // The Uniconta password and API key are NEVER placed in the JWT: a JWT payload
+        // is merely base64-encoded, so anyone who intercepts the token could read them.
+        // Secrets live server-side in IUnicontaCredentialStore, keyed by this identity.
         public string CreateToken(
             string username,
-            string apiKey,
             int companyId)
         {
             var jwt = _config.GetSection("Jwt");
@@ -34,7 +37,6 @@ namespace SoftcodeUnicontaMiddleware.Services
             var claims = new[]
             {
                 new Claim("username", username),
-                new Claim("apiKey", apiKey),
                 new Claim("companyId", companyId.ToString())
             };
 
