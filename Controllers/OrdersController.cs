@@ -59,4 +59,60 @@ public class OrdersController : ControllerBase
         _logger.LogWarning("Order {OrderId} failed Uniconta submission: {Message}", request.OrderId, result.Message);
         return UnprocessableEntity(new OrderResponse { Accepted = false, Message = result.Message });
     }
+
+    /// <summary>
+    /// Post the invoice in Uniconta for an existing order (turns the sales
+    /// order into a posted invoice). Called when the payment is captured.
+    /// Returns 404 if the order does not exist (or was already fully invoiced —
+    /// Uniconta removes fully invoiced orders).
+    /// </summary>
+    [HttpPost("{orderNumber:int}/invoice")]
+    public async Task<IActionResult> Invoice(int orderNumber, [FromBody] InvoiceOrderRequest request)
+    {
+        if (orderNumber <= 0)
+            return BadRequest(new OrderResponse { Message = "Invalid order number" });
+
+        UnicontaServiceClient client;
+        try
+        {
+            client = await _factory.CreateAsync();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new OrderResponse { Message = ex.Message });
+        }
+
+        var order = await client.GetOrderByNumberAsync(orderNumber);
+        if (order == null)
+        {
+            _logger.LogWarning("Invoice request: order {OrderNumber} not found in Uniconta (already invoiced?)", orderNumber);
+            return NotFound(new OrderResponse { Message = $"Order {orderNumber} not found in Uniconta (already invoiced?)" });
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.OurRef))
+        {
+            order._OurRef = request.OurRef;
+            var updateResult = await client.UpdateOrderHeaderAsync(order);
+            if (updateResult != Uniconta.Common.ErrorCodes.Succes)
+                _logger.LogWarning("Could not set OurRef on order {OrderNumber}: {Result}", orderNumber, updateResult);
+        }
+
+        var lines = await client.GetOrderLinesAsync(order);
+        if (lines.Length == 0)
+        {
+            _logger.LogWarning("Invoice request: order {OrderNumber} has no lines to invoice", orderNumber);
+            return UnprocessableEntity(new OrderResponse { Message = $"Order {orderNumber} has no lines to invoice" });
+        }
+
+        var result = await client.PostInvoiceAsync(order, lines);
+        if (result == null || result.Err != Uniconta.Common.ErrorCodes.Succes)
+        {
+            var msg = $"PostInvoice returned {result?.Err}";
+            _logger.LogError("Invoice posting failed for order {OrderNumber}: {Message}", orderNumber, msg);
+            return UnprocessableEntity(new OrderResponse { Accepted = false, Message = msg });
+        }
+
+        _logger.LogInformation("Invoice posted in Uniconta for order {OrderNumber}", orderNumber);
+        return Ok(new OrderResponse { Accepted = true, Message = $"Invoice posted for order {orderNumber}" });
+    }
 }
