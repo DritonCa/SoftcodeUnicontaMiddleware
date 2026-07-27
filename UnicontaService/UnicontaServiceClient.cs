@@ -369,5 +369,28 @@ namespace SoftcodeUnicontaMiddleware.UnicontaService
             var iapi = new InvoiceAPI(crud);
             return await iapi.PostInvoice(order, lines, DateTime.Now, 0, false);
         }
+
+        public async Task<DebtorOrderClient?> GetOrderByNumberAsync(int orderNumber)
+        {
+            EnsureInit();
+            var crud = new CrudAPI(_session, _company);
+            var order = new DebtorOrderClient { _OrderNumber = orderNumber };
+            var result = await crud.Read(order);
+            return result == ErrorCodes.Succes ? order : null;
+        }
+
+        public async Task<DebtorOrderLineClient[]> GetOrderLinesAsync(DebtorOrderClient order)
+        {
+            EnsureInit();
+            var q = new QueryAPI(_session, _company);
+            return await q.Query<DebtorOrderLineClient>(order) ?? Array.Empty<DebtorOrderLineClient>();
+        }
+
+        public async Task<ErrorCodes> UpdateOrderHeaderAsync(DebtorOrderClient order)
+        {
+            EnsureInit();
+            var crud = new CrudAPI(_session, _company);
+            return await crud.Update(order);
+        }
     }
 }
