@@ -1,4 +1,8 @@
-﻿using SoftcodeUnicontaMiddleware.Models.Common;
+// Wraps the Uniconta SDK, which is not nullable-annotated; scope nullable off here
+// so the rest of the codebase can stay nullable-strict (build runs with /warnaserror).
+#nullable disable
+
+using SoftcodeUnicontaMiddleware.Models.Common;
 using SoftcodeUnicontaMiddleware.Models.Dtos;
 using Microsoft.Extensions.Caching.Memory;
 using System;

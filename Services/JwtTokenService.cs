@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -43,7 +43,7 @@ namespace SoftcodeUnicontaMiddleware.Services
                 audience: jwt["Audience"],
                 claims: claims,
                 expires: DateTime.UtcNow.AddMinutes(
-                    int.Parse(jwt["ExpiresMinutes"])
+                    int.Parse(jwt["ExpiresMinutes"] ?? "60")
                 ),
                 signingCredentials: new SigningCredentials(
                     key,
