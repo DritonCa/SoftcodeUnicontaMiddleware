@@ -24,11 +24,14 @@ builder.Services.AddMemoryCache();
 // ✅ REQUIRED for UnicontaServiceClientFactory
 builder.Services.AddHttpContextAccessor();
 
+// 🔐 Fail fast on missing or placeholder secrets before anything else starts.
+// A predictable JWT key or client-secret pepper is a real vulnerability, so the
+// app refuses to boot until real values are configured.
+var jwtKey = StartupSecrets.Require(builder.Configuration, "Jwt:Key", 32);
+StartupSecrets.Require(builder.Configuration, "Auth:SecretPepper", 16);
+
 // 🔐 JWT AUTH
 var jwt = builder.Configuration.GetSection("Jwt");
-
-var jwtKey = jwt["Key"]
-    ?? throw new InvalidOperationException("Jwt:Key is missing");
 
 var key = Encoding.UTF8.GetBytes(jwtKey);
 

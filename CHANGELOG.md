@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Security
 
+- **Fail fast on placeholder secrets.** The app now refuses to start (via
+  `StartupSecrets.Require` in `Program.cs`) if `Jwt:Key` or `Auth:SecretPepper` is
+  missing, still the shipped `CHANGE_THIS…` placeholder, or too short — a predictable
+  signing key or pepper would let tokens be forged or client secrets brute-forced.
+  Covered by `StartupSecretsTests`.
 - **The Uniconta API key is no longer placed in the JWT.** Access tokens now carry
   identity only (`username` + `companyId`); the API key and password are held
   server-side in `IUnicontaCredentialStore` and never travel inside the token, which

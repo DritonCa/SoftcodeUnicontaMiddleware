@@ -115,6 +115,11 @@ variables, or user-secrets:
 | `Uniconta:ApiKey` / `Username` / `Password` | Uniconta ERP credentials |
 | `ConnectionStrings:AppDb` | Optional; overrides the default local SQLite file |
 
+The app **refuses to start** if `Jwt:Key` or `Auth:SecretPepper` is missing, still
+the shipped placeholder, or too short — a predictable signing key or pepper would
+let tokens be forged or client secrets brute-forced, so a fresh checkout must supply
+real values before it will boot.
+
 ---
 
 ## Testing
