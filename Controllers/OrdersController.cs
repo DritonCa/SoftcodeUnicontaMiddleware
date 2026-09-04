@@ -14,15 +14,18 @@ public class OrdersController : ControllerBase
     private readonly UnicontaServiceClientFactory _factory;
     private readonly OrderService _orderService;
     private readonly ILogger<OrdersController> _logger;
+    private readonly IOrderLogger _orderLog;
 
     public OrdersController(
         UnicontaServiceClientFactory factory,
         OrderService orderService,
-        ILogger<OrdersController> logger)
+        ILogger<OrdersController> logger,
+        IOrderLogger orderLog)
     {
         _factory      = factory;
         _orderService = orderService;
         _logger       = logger;
+        _orderLog     = orderLog;
     }
 
     /// <summary>
@@ -32,6 +35,14 @@ public class OrdersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Submit([FromBody] OrderRequest request)
     {
+        // Log every incoming order the moment it arrives (before any validation),
+        // so it can be followed live via journalctl + logs/uniconta_orders.log.
+        _logger.LogInformation(
+            "📥 ORDER RECEIVED: orderId={OrderId} type={Type} email={Email} items={Items} total={Total} shipping={Shipping}",
+            request.OrderId, request.CustomerType, request.Email, request.Items?.Count ?? 0, request.TotalPrice, request.ShippingAmount);
+        _orderLog.LogReceived(request.OrderId, request.CustomerType ?? "", request.Email ?? "",
+            $"items={request.Items?.Count ?? 0} total={request.TotalPrice} shipping={request.ShippingAmount}");
+
         if (request.OrderId <= 0)
             return BadRequest(new OrderResponse { Message = "Invalid OrderId" });
 
@@ -69,6 +80,8 @@ public class OrdersController : ControllerBase
     [HttpPost("{orderNumber:int}/invoice")]
     public async Task<IActionResult> Invoice(int orderNumber, [FromBody] InvoiceOrderRequest request)
     {
+        _logger.LogInformation("📥 INVOICE REQUEST: orderNumber={OrderNumber} ourRef={OurRef}", orderNumber, request?.OurRef);
+
         if (orderNumber <= 0)
             return BadRequest(new OrderResponse { Message = "Invalid order number" });
 

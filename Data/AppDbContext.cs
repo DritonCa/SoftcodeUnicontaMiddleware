@@ -12,5 +12,6 @@ namespace SoftcodeUnicontaMiddleware.Data
 
         public DbSet<ApiTenant> Tenants => Set<ApiTenant>();
         public DbSet<ApiClient> Clients => Set<ApiClient>();
+        public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     }
 }

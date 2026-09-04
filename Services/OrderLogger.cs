@@ -21,6 +21,9 @@ public class OrderLogger : IOrderLogger
         _path = Path.Combine(dir, "uniconta_orders.log");
     }
 
+    public void LogReceived(int orderId, string customerType, string email, string summary)
+        => Write("RECEIVED ", $"orderId={orderId} type={customerType} email={email} {summary}");
+
     public void LogSubmitted(int orderId, string customerType, string email, string debtorAccount)
         => Write("SUBMITTED", $"orderId={orderId} type={customerType} email={email} debtor={debtorAccount}");
 

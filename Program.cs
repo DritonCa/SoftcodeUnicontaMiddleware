@@ -48,6 +48,20 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(key)
         };
+    })
+    // 🍪 Cookie scheme for the browser order-log interface only (JWT stays the
+    // default, so the API clients are unaffected).
+    .AddCookie(SoftcodeUnicontaMiddleware.Controllers.AdminController.CookieScheme, options =>
+    {
+        options.Cookie.Name         = "sc_admin";
+        options.Cookie.HttpOnly     = true;
+        options.Cookie.SameSite     = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.ExpireTimeSpan      = TimeSpan.FromHours(8);
+        options.SlidingExpiration   = true;
+        // Return status codes instead of redirecting (the UI is a single page).
+        options.Events.OnRedirectToLogin        = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
+        options.Events.OnRedirectToAccessDenied = ctx => { ctx.Response.StatusCode = 403; return Task.CompletedTask; };
     });
 
 builder.Services.AddAuthorization();
@@ -82,6 +96,10 @@ builder.Services.AddScoped<IRefreshTokenStore, MemoryRefreshTokenStore>();
 builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 builder.Services.AddScoped<SoftcodeUnicontaMiddleware.Services.OrderService>();
 builder.Services.AddSingleton<SoftcodeUnicontaMiddleware.Services.IOrderLogger, SoftcodeUnicontaMiddleware.Services.OrderLogger>();
+
+// Order-log admin interface
+builder.Services.AddScoped<SoftcodeUnicontaMiddleware.Services.IAdminUserService, SoftcodeUnicontaMiddleware.Services.AdminUserService>();
+builder.Services.AddSingleton<SoftcodeUnicontaMiddleware.Services.OrderLogReader>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -133,6 +151,20 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Data.AppDbContext>();
     var hasher = scope.ServiceProvider.GetRequiredService<SoftcodeUnicontaMiddleware.Services.SecretHasher>();
     db.Database.Migrate();
+
+    // AdminUsers is managed outside EF migrations (kept isolated from the security
+    // schema) — ensure it exists on startup.
+    db.Database.ExecuteSqlRaw(
+        @"CREATE TABLE IF NOT EXISTS ""AdminUsers"" (
+            ""Id"" INTEGER NOT NULL CONSTRAINT ""PK_AdminUsers"" PRIMARY KEY AUTOINCREMENT,
+            ""Username"" TEXT NOT NULL,
+            ""PasswordHash"" TEXT NOT NULL,
+            ""CreatedAt"" TEXT NOT NULL,
+            ""LastLoginAt"" TEXT NULL
+          );");
+    db.Database.ExecuteSqlRaw(
+        @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_AdminUsers_Username"" ON ""AdminUsers"" (""Username"");");
+
     SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db, hasher);
 }
 
