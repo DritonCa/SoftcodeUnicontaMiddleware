@@ -41,9 +41,7 @@ public class OrderService
                     return new OrderResult { Success = false, Message = msg };
                 }
 
-                account = req.CustomerType == "ean" ? (req.Ean ?? req.Email)
-                        : req.CustomerType == "cvr" ? (req.Cvr ?? req.Email)
-                        : req.Email;
+                account = AccountFor(req);
             }
 
             var order       = BuildOrderHeader(req, account);
@@ -144,10 +142,21 @@ public class OrderService
 
     // ---- Debtor creation -------------------------------------------------------
 
+    // The debtor account / key: EAN for ean, CVR for cvr, otherwise the email.
+    // The new debtor is created with this as _Account and the order header references
+    // the same value, so the two always line up.
+    private static string AccountFor(OrderRequest req) =>
+        req.CustomerType == "ean" ? (req.Ean ?? req.Email)
+      : req.CustomerType == "cvr" ? (req.Cvr ?? req.Email)
+      : req.Email;
+
     private static DebtorClient BuildDebtor(OrderRequest req)
     {
         var debtor = new DebtorClient
         {
+            // Uniconta requires the debtor key (_Account); without it Insert fails with
+            // KeyIsEmpty. Must match the account the order header will reference.
+            _Account       = AccountFor(req),
             _Name          = !string.IsNullOrEmpty(req.CompanyName) ? req.CompanyName : req.ContactName,
             _Address1      = req.DeliveryAddress,
             _ZipCode       = req.DeliveryPostcode,
