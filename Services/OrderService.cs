@@ -37,7 +37,7 @@ public class OrderService
                 {
                     var msg = $"CreateDebtor returned {createResult}";
                     _logger.LogWarning(msg + " for order {OrderId}", req.OrderId);
-                    _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
+                    _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg, DescribeDebtor(debtor, req));
                     return new OrderResult { Success = false, Message = msg };
                 }
 
@@ -52,7 +52,9 @@ public class OrderService
             {
                 var msg = $"CreateOrderHeader returned {orderResult}";
                 _logger.LogError(msg + " for order {OrderId}", req.OrderId);
-                _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg);
+                _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg,
+                    $"ORDER header create attempt:\n  Account={account}\n  OrderNumber={req.OrderId}\n" +
+                    $"  Payment={req.PaymentCode}\n  SalesValue={req.TotalPrice}\n  DeliveryType={req.DeliveryType}");
                 return new OrderResult { Success = false, Message = msg };
             }
 
@@ -120,7 +122,7 @@ public class OrderService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Order processing failed for order {OrderId}", req.OrderId);
-            _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message);
+            _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message, ex.ToString());
             return new OrderResult { Success = false, Message = ex.Message };
         }
     }
@@ -156,14 +158,41 @@ public class OrderService
             _MobilPhone    = req.Phone ?? "",
             _Payment       = req.PaymentCode,
             _Vat           = "U25",
-            _Group         = req.CustomerType == "privat" ? "PRIV" : "ERHVERV"
+            // Uniconta debtor group MUST be an existing group in the company:
+            // EAN / CVR / PRIV. The previous "ERHVERV" does not exist there, so
+            // creating a new company debtor failed with FieldHasInvalidValue.
+            _Group         = req.CustomerType switch
+            {
+                "ean" => "EAN",
+                "cvr" => "CVR",
+                _     => "PRIV"
+            }
         };
 
-        if (req.CustomerType == "ean" && !string.IsNullOrEmpty(req.Ean))
+        // CVR customers: legal/VAT number on the debtor.
+        // EAN customers: GLN + electronic (OIOUBL/XML) invoicing, like the old app.
+        if (req.CustomerType == "cvr" && !string.IsNullOrEmpty(req.Cvr))
+        {
+            debtor._VatNumber = req.Cvr;
+        }
+        else if (req.CustomerType == "ean" && !string.IsNullOrEmpty(req.Ean))
+        {
             debtor._EAN = req.Ean;
+            debtor._InvoiceInXML = true;
+        }
 
         return debtor;
     }
+
+    // Full field dump of an attempted debtor — written to the error log so a
+    // FieldHasInvalidValue failure shows exactly which value Uniconta rejected.
+    private static string DescribeDebtor(DebtorClient d, OrderRequest req) =>
+        $"DEBTOR create attempt:\n" +
+        $"  Name={d._Name}\n  Group={d._Group}\n  Vat={d._Vat}\n  Payment={d._Payment}\n" +
+        $"  Country={d._Country}\n  VatNumber={d._VatNumber}\n  EAN={d._EAN}\n  InvoiceInXML={d._InvoiceInXML}\n" +
+        $"  Address1={d._Address1}\n  ZipCode={d._ZipCode}\n  City={d._City}\n" +
+        $"  ContactEmail={d._ContactEmail}\n  MobilPhone={d._MobilPhone}\n" +
+        $"  (request) CustomerType={req.CustomerType} Cvr={req.Cvr} Ean={req.Ean} CompanyName={req.CompanyName}";
 
     // ---- Order header ----------------------------------------------------------
 

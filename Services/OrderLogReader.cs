@@ -11,6 +11,7 @@ namespace SoftcodeUnicontaMiddleware.Services
     public class OrderLogReader
     {
         private readonly string _path;
+        private readonly string _errorPath;
 
         private static readonly Regex LineRx = new(
             @"^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC \[(?<lvl>[^\]]+)\]\s*(?<msg>.*)$",
@@ -19,7 +20,32 @@ namespace SoftcodeUnicontaMiddleware.Services
 
         public OrderLogReader(IWebHostEnvironment env)
         {
-            _path = Path.Combine(env.ContentRootPath, "logs", "uniconta_orders.log");
+            _path      = Path.Combine(env.ContentRootPath, "logs", "uniconta_orders.log");
+            _errorPath = Path.Combine(env.ContentRootPath, "logs", "uniconta_errors.log");
+        }
+
+        /// <summary>
+        /// Raw contents of logs/uniconta_errors.log (full exception/stack detail),
+        /// tail-trimmed to <paramref name="maxChars"/> for the admin error-log panel.
+        /// </summary>
+        public string ReadErrorLog(int maxChars = 200_000)
+        {
+            if (!File.Exists(_errorPath))
+                return "";
+            try
+            {
+                using var fs = new FileStream(_errorPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var sr = new StreamReader(fs);
+                var content = sr.ReadToEnd();
+                if (content.Length > maxChars)
+                    content = "…(afkortet — viser de seneste " + maxChars + " tegn)\n\n"
+                            + content.Substring(content.Length - maxChars);
+                return content;
+            }
+            catch
+            {
+                return "";
+            }
         }
 
         public IReadOnlyList<OrderLogEntry> Read(string? search, int limit = 500)

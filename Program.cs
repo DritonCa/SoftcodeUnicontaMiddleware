@@ -165,6 +165,18 @@ using (var scope = app.Services.CreateScope())
     db.Database.ExecuteSqlRaw(
         @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_AdminUsers_Username"" ON ""AdminUsers"" (""Username"");");
 
+    // ClientSecretEnc (reversibly-encrypted secret for the admin Companies view) is
+    // added out-of-migration; SQLite has no ADD COLUMN IF NOT EXISTS, so ignore the
+    // "duplicate column" error on subsequent boots.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"ALTER TABLE ""Clients"" ADD COLUMN ""ClientSecretEnc"" TEXT NULL;");
+    }
+    catch
+    {
+        /* column already exists */
+    }
+
     SoftcodeUnicontaMiddleware.Data.DbSeeder.Seed(db, hasher);
 }
 

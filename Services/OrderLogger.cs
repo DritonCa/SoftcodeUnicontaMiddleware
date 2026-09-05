@@ -12,13 +12,15 @@ namespace SoftcodeUnicontaMiddleware.Services;
 public class OrderLogger : IOrderLogger
 {
     private readonly string _path;
+    private readonly string _errorPath;
     private readonly object _lock = new();
 
     public OrderLogger(IConfiguration config, IWebHostEnvironment env)
     {
         var dir = Path.Combine(env.ContentRootPath, "logs");
         Directory.CreateDirectory(dir);
-        _path = Path.Combine(dir, "uniconta_orders.log");
+        _path      = Path.Combine(dir, "uniconta_orders.log");
+        _errorPath = Path.Combine(dir, "uniconta_errors.log");
     }
 
     public void LogReceived(int orderId, string customerType, string email, string summary)
@@ -27,8 +29,12 @@ public class OrderLogger : IOrderLogger
     public void LogSubmitted(int orderId, string customerType, string email, string debtorAccount)
         => Write("SUBMITTED", $"orderId={orderId} type={customerType} email={email} debtor={debtorAccount}");
 
-    public void LogFailed(int orderId, string customerType, string email, string reason)
-        => Write("FAILED   ", $"orderId={orderId} type={customerType} email={email} error={reason}");
+    public void LogFailed(int orderId, string customerType, string email, string reason, string? detail = null)
+    {
+        Write("FAILED   ", $"orderId={orderId} type={customerType} email={email} error={reason}");
+        if (!string.IsNullOrWhiteSpace(detail))
+            WriteError(orderId, customerType, email, reason, detail!);
+    }
 
     public void LogLineWarning(int orderId, string sku, string reason)
         => Write("LINE_WARN", $"orderId={orderId} sku={sku} reason={reason}");
@@ -39,6 +45,22 @@ public class OrderLogger : IOrderLogger
         lock (_lock)
         {
             File.AppendAllText(_path, line);
+        }
+    }
+
+    // Full, multi-line failure detail (exception + stack + the exact fields that
+    // were rejected) — surfaced verbatim in the admin "Vis komplet fejllog" panel.
+    private void WriteError(int orderId, string type, string email, string reason, string detail)
+    {
+        var nl    = Environment.NewLine;
+        var block =
+            "================================================================" + nl +
+            $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC  orderId={orderId} type={type} email={email}" + nl +
+            $"REASON: {reason}" + nl + nl +
+            detail + nl + nl;
+        lock (_lock)
+        {
+            File.AppendAllText(_errorPath, block);
         }
     }
 }
