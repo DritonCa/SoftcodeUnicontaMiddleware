@@ -30,8 +30,9 @@ public class OrderService
 
             if (account == null)
             {
-                debtorStatus = "new";
-                var debtor       = BuildDebtor(req);
+                debtorStatus     = "new";
+                account          = NextAccountNumber(debtors);   // highest existing Uniconta account + 1
+                var debtor       = BuildDebtor(req, account);
                 var createResult = await client.CreateDebtorAsync(debtor);
                 if (createResult != ErrorCodes.Succes)
                 {
@@ -40,8 +41,6 @@ public class OrderService
                     _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg, DescribeDebtor(debtor, req));
                     return new OrderResult { Success = false, Message = msg };
                 }
-
-                account = AccountFor(req);
             }
 
             var order       = BuildOrderHeader(req, account);
@@ -142,21 +141,27 @@ public class OrderService
 
     // ---- Debtor creation -------------------------------------------------------
 
-    // The debtor account / key: EAN for ean, CVR for cvr, otherwise the email.
-    // The new debtor is created with this as _Account and the order header references
-    // the same value, so the two always line up.
-    private static string AccountFor(OrderRequest req) =>
-        req.CustomerType == "ean" ? (req.Ean ?? req.Email)
-      : req.CustomerType == "cvr" ? (req.Cvr ?? req.Email)
-      : req.Email;
+    // Next debtor account = highest existing account number + 1, mirroring the store's
+    // 6-digit numbering. Uniconta requires an explicit key (empty -> KeyIsEmpty) and does
+    // NOT auto-number on insert. The EAN/CVR itself lives in _EAN/_VatNumber, NOT the key.
+    // Guard: only real account numbers count (≤ 9 digits) so a stray EAN-shaped account
+    // (13 digits) can never hijack the max and blow the numbering up.
+    private static string NextAccountNumber(Debtor[] debtors)
+    {
+        long max = 0;
+        foreach (var d in debtors)
+            if ((d._Account?.Length ?? 0) <= 9 && long.TryParse(d._Account, out var n) && n > max)
+                max = n;
+        return (max + 1).ToString();
+    }
 
-    private static DebtorClient BuildDebtor(OrderRequest req)
+    private static DebtorClient BuildDebtor(OrderRequest req, string account)
     {
         var debtor = new DebtorClient
         {
             // Uniconta requires the debtor key (_Account); without it Insert fails with
-            // KeyIsEmpty. Must match the account the order header will reference.
-            _Account       = AccountFor(req),
+            // KeyIsEmpty. This is the account the order header will also reference.
+            _Account       = account,
             _Name          = !string.IsNullOrEmpty(req.CompanyName) ? req.CompanyName : req.ContactName,
             _Address1      = req.DeliveryAddress,
             _ZipCode       = req.DeliveryPostcode,
