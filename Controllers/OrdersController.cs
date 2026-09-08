@@ -41,7 +41,8 @@ public class OrdersController : ControllerBase
             "📥 ORDER RECEIVED: orderId={OrderId} type={Type} email={Email} items={Items} total={Total} shipping={Shipping}",
             request.OrderId, request.CustomerType, request.Email, request.Items?.Count ?? 0, request.TotalPrice, request.ShippingAmount);
         _orderLog.LogReceived(request.OrderId, request.CustomerType ?? "", request.Email ?? "",
-            $"items={request.Items?.Count ?? 0} total={request.TotalPrice} shipping={request.ShippingAmount}");
+            $"items={request.Items?.Count ?? 0} total={request.TotalPrice} shipping={request.ShippingAmount}",
+            request);
 
         if (request.OrderId <= 0)
             return BadRequest(new OrderResponse { Message = "Invalid OrderId" });

@@ -119,10 +119,91 @@ public class AdminController : ControllerBase
 
     [HttpGet("/admin/api/logs")]
     [Authorize(AuthenticationSchemes = CookieScheme)]
-    public IActionResult Logs([FromQuery] string? search, [FromQuery] int limit = 500)
+    public IActionResult Logs([FromQuery] string? search, [FromQuery] int limit = 500, [FromQuery] string? company = null)
     {
-        var entries = _logReader.Read(search, Math.Clamp(limit, 1, 2000));
+        var (legacyId, legacyName) = LegacyCompany();
+        var entries = _logReader.Read(search, Math.Clamp(limit, 1, 2000), company, legacyId, legacyName);
         return Ok(entries);
+    }
+
+    /// <summary>
+    /// Front-page figures: order counts across every company, plus a per-company
+    /// breakdown that also lists companies with no traffic yet.
+    /// </summary>
+    [HttpGet("/admin/api/dashboard")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public IActionResult Dashboard()
+    {
+        var (legacyId, legacyName) = LegacyCompany();
+        var stats = _logReader.Stats(null, legacyId, legacyName);
+
+        var registered = _db.Clients
+            .Include(c => c.Tenant)
+            .AsNoTracking()
+            .ToList();
+
+        var byClient = stats.Companies.ToDictionary(c => c.ClientId, StringComparer.OrdinalIgnoreCase);
+
+        var companies = registered
+            .Select(c =>
+            {
+                byClient.TryGetValue(c.ClientId, out var s);
+                return new
+                {
+                    clientId  = c.ClientId,
+                    company   = c.Tenant?.Name ?? c.ClientId,
+                    isActive  = c.IsActive,
+                    received  = s?.Received  ?? 0,
+                    submitted = s?.Submitted ?? 0,
+                    failed    = s?.Failed    ?? 0,
+                    lastEvent = s?.LastEvent
+                };
+            })
+            .OrderByDescending(c => c.received)
+            .ThenBy(c => c.company)
+            .ToList();
+
+        // Traffic from a client that has since been deleted must still be visible.
+        var known   = registered.Select(c => c.ClientId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var orphans = stats.Companies
+            .Where(c => !known.Contains(c.ClientId))
+            .Select(c => new
+            {
+                clientId  = c.ClientId,
+                company   = c.Company,
+                isActive  = false,
+                received  = c.Received,
+                submitted = c.Submitted,
+                failed    = c.Failed,
+                lastEvent = c.LastEvent
+            });
+
+        return Ok(new
+        {
+            received     = stats.Received,
+            submitted    = stats.Submitted,
+            failed       = stats.Failed,
+            lineWarnings = stats.LineWarnings,
+            received24h  = stats.Received24h,
+            failed24h    = stats.Failed24h,
+            lastEvent    = stats.LastEvent,
+            companies    = companies.Concat(orphans).ToList()
+        });
+    }
+
+    /// <summary>
+    /// The company that owns log entries written before events carried one — the
+    /// oldest registered client, i.e. the one that existed back then.
+    /// </summary>
+    private (string? ClientId, string? Company) LegacyCompany()
+    {
+        var c = _db.Clients
+            .Include(x => x.Tenant)
+            .AsNoTracking()
+            .OrderBy(x => x.CreatedAt)
+            .FirstOrDefault();
+
+        return c == null ? (null, null) : (c.ClientId, c.Tenant?.Name ?? c.ClientId);
     }
 
     /// <summary>Full multi-line failure detail (exception/stack + rejected fields).</summary>
@@ -260,7 +341,7 @@ public class AdminController : ControllerBase
   .toolbar .status { font-size:12px; color:var(--muted); margin-left:auto; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.4px; position:sticky; top:0; background:var(--card); }
+  th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
   td.details { font-family:ui-monospace,Menlo,Consolas,monospace; color:#cbd5e1; word-break:break-all; }
   .tag { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.3px; }
   .RECEIVED { background:#0e7490; color:#cffafe; }
@@ -268,18 +349,38 @@ public class AdminController : ControllerBase
   .FAILED { background:#991b1b; color:#fee2e2; }
   .LINE_WARN { background:#9a3412; color:#ffedd5; }
   .empty { text-align:center; color:var(--muted); padding:40px; }
-  #errPanel { margin-top:12px; max-height:440px; overflow:auto; background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:14px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:#fca5a5; white-space:pre-wrap; word-break:break-word; }
   .secret { font-family:ui-monospace,Menlo,Consolas,monospace; color:#e2e8f0; }
   .linkbtn { background:transparent; border:0; color:var(--accent); cursor:pointer; padding:0 6px; font-size:12px; font-weight:600; }
   .muted-note { color:var(--muted); font-style:italic; }
   [hidden] { display:none !important; }
+
+  /* dashboard */
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:26px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; }
+  .kpi .n { font-size:30px; font-weight:700; line-height:1.1; }
+  .kpi .l { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-top:6px; }
+  .kpi .s { font-size:12px; color:var(--muted); margin-top:8px; }
+  .kpi.bad .n { color:#f87171; }
+  .kpi.good .n { color:#4ade80; }
+  .section-title { font-size:14px; font-weight:600; margin:0 0 12px; }
+  tr.clickable { cursor:pointer; }
+  tr.clickable:hover td { background:#243147; }
+  .detail-cell { background:#0b1220; padding:0 10px 14px; }
+  .payload { margin:12px 0 0; background:#020617; border:1px solid var(--line); border-radius:8px; padding:12px;
+             font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:#cbd5e1;
+             white-space:pre-wrap; word-break:break-word; max-height:340px; overflow:auto; }
+  .payload.err { color:#fca5a5; }
+  .payload-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-top:12px; }
+  .chev { display:inline-block; width:12px; color:var(--muted); }
+  .crumb { color:var(--muted); font-size:13px; margin-bottom:10px; }
+  .crumb button { padding:0; }
 </style>
 </head>
 <body>
 <header>
   <h1>UNICONTA · MIDDLEWARE ADMIN</h1>
   <div id="hdrRight" hidden>
-    <button class="ghost navbtn" id="navLog">Ordre-log</button>
+    <button class="ghost navbtn" id="navDash">Dashboard</button>
     <button class="ghost navbtn" id="navCompanies">Virksomheder</button>
     <span class="who" id="whoami" style="margin-left:12px;"></span>
     <button class="ghost" id="logoutBtn" style="margin-left:12px;">Log ud</button>
@@ -312,24 +413,53 @@ public class AdminController : ControllerBase
   <div class="msg err" id="liMsg"></div>
 </div>
 
-<!-- DASHBOARD (order log) -->
+<!-- DASHBOARD -->
 <div id="dashView" class="wrap" hidden>
+  <div class="toolbar">
+    <strong style="font-size:14px;">Overblik</strong>
+    <button class="ghost" id="reloadDash">Opdater</button>
+    <span class="status" id="dashStatus"></span>
+  </div>
+  <div class="kpis" id="kpis"></div>
+
+  <h3 class="section-title">Ordrer pr. virksomhed</h3>
+  <table>
+    <thead><tr>
+      <th>Virksomhed</th>
+      <th style="width:160px;">Client-id</th>
+      <th style="width:100px;">Modtaget</th>
+      <th style="width:100px;">Overført</th>
+      <th style="width:90px;">Fejlet</th>
+      <th style="width:150px;">Seneste</th>
+      <th style="width:110px;"></th>
+    </tr></thead>
+    <tbody id="dashCompanyRows"></tbody>
+  </table>
+  <div class="empty" id="dashEmpty" hidden>Ingen virksomheder endnu.</div>
+</div>
+
+<!-- ORDER LOG (per company) -->
+<div id="logView" class="wrap" hidden>
+  <div class="crumb">
+    <button class="linkbtn" id="backToDash">← Dashboard</button>
+    · Ordre-log for <strong id="logCompanyName"></strong>
+  </div>
   <div class="toolbar">
     <input id="search" placeholder="Søg på ordrenummer, e-mail, status …">
     <button class="ghost" id="refreshBtn">Opdater nu</button>
-    <span class="status" id="dashStatus"></span>
+    <span class="status" id="logStatus"></span>
   </div>
   <table>
-    <thead><tr><th style="width:170px;">Tidspunkt (UTC)</th><th style="width:110px;">Status</th><th style="width:90px;">Ordre</th><th>Detaljer</th></tr></thead>
+    <thead><tr>
+      <th style="width:24px;"></th>
+      <th style="width:160px;">Tidspunkt (UTC)</th>
+      <th style="width:110px;">Status</th>
+      <th style="width:90px;">Ordre</th>
+      <th>Detaljer</th>
+    </tr></thead>
     <tbody id="rows"></tbody>
   </table>
   <div class="empty" id="empty" hidden>Ingen log-linjer endnu.</div>
-
-  <div style="margin-top:18px;">
-    <button class="ghost" id="toggleErr">Vis komplet fejllog</button>
-    <span class="status" id="errStatus" style="margin-left:10px;font-size:12px;color:var(--muted);"></span>
-    <pre id="errPanel" hidden></pre>
-  </div>
 </div>
 
 <!-- COMPANIES -->
@@ -342,10 +472,11 @@ public class AdminController : ControllerBase
   <table>
     <thead><tr>
       <th>Virksomhed</th>
-      <th style="width:180px;">Client-id (X-Client-Id)</th>
+      <th style="width:160px;">Client-id (X-Client-Id)</th>
       <th>Hemmelighed (X-Client-Secret)</th>
-      <th style="width:70px;">Aktiv</th>
-      <th style="width:130px;">Oprettet</th>
+      <th style="width:60px;">Aktiv</th>
+      <th style="width:120px;">Oprettet</th>
+      <th style="width:110px;"></th>
     </tr></thead>
     <tbody id="compRows"></tbody>
   </table>
@@ -367,16 +498,21 @@ public class AdminController : ControllerBase
 const $ = s => document.querySelector(s);
 const api = (p, opt) => fetch('/admin/api/' + p, Object.assign({ headers:{'Content-Type':'application/json'} }, opt));
 let timer = null;
+let currentCompany = null;      // { clientId, name } — whose log is on screen
+let openRows = new Set();       // rows the user expanded, kept across auto-refresh
 
 function show(view) {
-  for (const v of ['setupView','loginView','dashView','companiesView']) $('#'+v).hidden = (v !== view);
-  $('#hdrRight').hidden = !(view === 'dashView' || view === 'companiesView');
-  $('#navLog').classList.toggle('active', view === 'dashView');
+  for (const v of ['setupView','loginView','dashView','logView','companiesView']) $('#'+v).hidden = (v !== view);
+  $('#hdrRight').hidden = ['setupView','loginView'].includes(view);
+  $('#navDash').classList.toggle('active', view === 'dashView' || view === 'logView');
   $('#navCompanies').classList.toggle('active', view === 'companiesView');
   if (timer) { clearInterval(timer); timer = null; }
-  if (view === 'dashView') { loadLogs(); timer = setInterval(loadLogs, 4000); }
+  if (view === 'dashView') { loadDashboard(); timer = setInterval(loadDashboard, 10000); }
+  if (view === 'logView')  { loadLogs();      timer = setInterval(loadLogs, 5000); }
   if (view === 'companiesView') { loadCompanies(); }
 }
+
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function boot() {
   const s = await (await api('status')).json();
@@ -405,53 +541,111 @@ $('#liBtn').onclick = async () => {
 $('#liPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#liBtn').click(); });
 
 $('#logoutBtn').onclick = async () => { await api('logout', { method:'POST' }); show('loginView'); };
-$('#navLog').onclick = () => show('dashView');
+$('#navDash').onclick = () => show('dashView');
 $('#navCompanies').onclick = () => show('companiesView');
+$('#backToDash').onclick = () => show('dashView');
+$('#reloadDash').onclick = () => loadDashboard();
 $('#refreshBtn').onclick = () => loadLogs();
 $('#reloadCompanies').onclick = () => loadCompanies();
 let searchDebounce;
 $('#search').addEventListener('input', () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(loadLogs, 300); });
 
-function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// ---- dashboard -------------------------------------------------------------
+
+function kpi(n, label, sub, cls) {
+  return '<div class="kpi '+(cls||'')+'"><div class="n">'+n+'</div><div class="l">'+esc(label)+'</div>'+
+         (sub ? '<div class="s">'+esc(sub)+'</div>' : '')+'</div>';
+}
+
+async function loadDashboard() {
+  let r;
+  try { r = await api('dashboard'); } catch { return; }
+  if (r.status === 401) { show('loginView'); return; }
+  if (!r.ok) return;
+  const d = await r.json();
+
+  $('#kpis').innerHTML =
+    kpi(d.received,  'Ordrer modtaget',      d.received24h + ' seneste døgn') +
+    kpi(d.submitted, 'Overført til Uniconta', null, 'good') +
+    kpi(d.failed,    'Fejlede ordrer',        d.failed24h + ' seneste døgn', d.failed ? 'bad' : '') +
+    kpi(d.lineWarnings, 'Linje-advarsler',    null) +
+    kpi(d.lastEvent ? d.lastEvent.substring(11,16) : '—', 'Seneste hændelse',
+        d.lastEvent ? d.lastEvent.substring(0,10) + ' UTC' : 'ingen endnu');
+
+  const rows = (d.companies || []).map(c =>
+    '<tr>'+
+      '<td>'+esc(c.company)+(c.isActive ? '' : ' <span class="muted-note">(inaktiv)</span>')+'</td>'+
+      '<td class="secret">'+esc(c.clientId)+'</td>'+
+      '<td>'+c.received+'</td>'+
+      '<td>'+c.submitted+'</td>'+
+      '<td'+(c.failed ? ' style="color:#f87171;font-weight:600;"' : '')+'>'+c.failed+'</td>'+
+      '<td>'+esc(c.lastEvent || '—')+'</td>'+
+      '<td><button class="linkbtn" onclick="openLog(\'' + esc(c.clientId) + '\',\'' + esc(c.company).replace(/'/g,"\\'") + '\')">Ordre-log →</button></td>'+
+    '</tr>').join('');
+  $('#dashCompanyRows').innerHTML = rows;
+  $('#dashEmpty').hidden = (d.companies || []).length > 0;
+  $('#dashStatus').textContent = 'Opdateret ' + new Date().toLocaleTimeString('da-DK');
+}
+
+// ---- order log -------------------------------------------------------------
+
+function openLog(clientId, name) {
+  currentCompany = { clientId, name };
+  openRows = new Set();
+  $('#logCompanyName').textContent = name;
+  $('#search').value = '';
+  show('logView');
+}
+
+function payload(label, text, cls) {
+  if (!text) return '';
+  return '<div class="payload-label">'+esc(label)+'</div><pre class="payload '+(cls||'')+'">'+esc(text)+'</pre>';
+}
 
 async function loadLogs() {
+  if (!currentCompany) { show('dashView'); return; }
   const q = encodeURIComponent($('#search').value.trim());
   let r;
-  try { r = await api('logs?search=' + q); } catch { return; }
+  try { r = await api('logs?company=' + encodeURIComponent(currentCompany.clientId) + '&search=' + q); } catch { return; }
   if (r.status === 401) { show('loginView'); return; }
   if (!r.ok) return;
   const data = await r.json();
-  const rows = $('#rows');
-  rows.innerHTML = data.map(e => {
-    const lvl = (e.level || '').trim();
-    return '<tr><td>'+esc(e.timestamp)+'</td>'+
-           '<td><span class="tag '+esc(lvl)+'">'+esc(lvl)+'</span></td>'+
-           '<td>'+(e.orderId ?? '')+'</td>'+
-           '<td class="details">'+esc(e.details)+'</td></tr>';
+
+  $('#rows').innerHTML = data.map((e, i) => {
+    const lvl  = (e.level || '').trim();
+    const key  = e.timestamp + '|' + (e.orderId ?? '') + '|' + lvl;
+    const has  = !!(e.request || e.response || e.detail);
+    const open = openRows.has(key);
+    const body =
+      payload('Request — modtaget fra webshoppen', e.request) +
+      payload('Response — sendt retur', e.response) +
+      payload('Fejldetaljer', e.detail, 'err');
+
+    return '<tr class="'+(has ? 'clickable' : '')+'"'+(has ? ' onclick="toggleRow(\'' + esc(key) + '\',' + i + ')"' : '')+'>'+
+             '<td class="chev" id="chev'+i+'">'+(has ? (open ? '▾' : '▸') : '')+'</td>'+
+             '<td>'+esc(e.timestamp)+'</td>'+
+             '<td><span class="tag '+esc(lvl)+'">'+esc(lvl)+'</span></td>'+
+             '<td>'+(e.orderId ?? '')+'</td>'+
+             '<td class="details">'+esc(e.details)+'</td>'+
+           '</tr>'+
+           '<tr id="det'+i+'"'+(open ? '' : ' hidden')+'><td></td><td colspan="4" class="detail-cell">'+
+             (has ? body : '<div class="muted-note" style="padding-top:12px;">Ingen gemte detaljer for denne linje.</div>')+
+           '</td></tr>';
   }).join('');
+
   $('#empty').hidden = data.length > 0;
-  const t = new Date();
-  $('#dashStatus').textContent = 'Opdateret ' + t.toLocaleTimeString('da-DK') + ' · ' + data.length + ' linjer';
+  $('#logStatus').textContent = 'Opdateret ' + new Date().toLocaleTimeString('da-DK') + ' · ' + data.length + ' linjer';
 }
 
-$('#toggleErr').onclick = async () => {
-  const panel = $('#errPanel');
-  if (!panel.hidden) { panel.hidden = true; $('#toggleErr').textContent = 'Vis komplet fejllog'; $('#errStatus').textContent = ''; return; }
-  panel.hidden = false;
-  $('#toggleErr').textContent = 'Skjul fejllog';
-  await loadErrors();
-};
-
-async function loadErrors() {
-  $('#errStatus').textContent = 'Henter …';
-  let r;
-  try { r = await api('errors'); } catch { $('#errStatus').textContent = 'Kunne ikke hente.'; return; }
-  if (r.status === 401) { show('loginView'); return; }
-  const d = await r.json();
-  const text = (d.text || '').trim();
-  $('#errPanel').textContent = text || 'Ingen fejl logget endnu. 🎉';
-  $('#errStatus').textContent = 'Opdateret ' + new Date().toLocaleTimeString('da-DK');
+function toggleRow(key, i) {
+  const row = $('#det'+i), chev = $('#chev'+i);
+  if (!row) return;
+  row.hidden = !row.hidden;
+  chev.textContent = row.hidden ? '▸' : '▾';
+  if (row.hidden) openRows.delete(key); else openRows.add(key);
 }
+
+// ---- companies -------------------------------------------------------------
 
 async function loadCompanies() {
   $('#compStatus').textContent = 'Henter …';
@@ -480,6 +674,7 @@ async function loadCompanies() {
       '<td>'+secretCell+'</td>'+
       '<td>'+(c.isActive ? '✓' : '—')+'</td>'+
       '<td>'+esc(c.createdAt)+'</td>'+
+      '<td><button class="linkbtn" onclick="openLog(\'' + esc(c.clientId) + '\',\'' + esc(c.tenantName).replace(/'/g,"\\'") + '\')">Ordre-log →</button></td>'+
     '</tr>';
   }).join('');
   $('#compEmpty').hidden = data.length > 0;

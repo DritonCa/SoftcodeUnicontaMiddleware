@@ -25,3 +25,6 @@ appsettings.Production.json
 
 dataprotection-keys/
 
+
+## Runtime logs
+logs/

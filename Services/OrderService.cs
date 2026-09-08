@@ -38,8 +38,10 @@ public class OrderService
                 {
                     var msg = $"CreateDebtor returned {createResult}";
                     _logger.LogWarning(msg + " for order {OrderId}", req.OrderId);
-                    _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg, DescribeDebtor(debtor, req));
-                    return new OrderResult { Success = false, Message = msg };
+                    var debtorFail = new OrderResult { Success = false, Message = msg };
+                    _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg,
+                        DescribeDebtor(debtor, req), req, debtorFail);
+                    return debtorFail;
                 }
             }
 
@@ -49,10 +51,12 @@ public class OrderService
             {
                 var msg = $"CreateOrderHeader returned {orderResult}";
                 _logger.LogError(msg + " for order {OrderId}", req.OrderId);
+                var headerFail = new OrderResult { Success = false, Message = msg };
                 _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, msg,
                     $"ORDER header create attempt:\n  Account={account}\n  OrderNumber={req.OrderId}\n" +
-                    $"  Payment={req.PaymentCode}\n  SalesValue={req.TotalPrice}\n  DeliveryType={req.DeliveryType}");
-                return new OrderResult { Success = false, Message = msg };
+                    $"  Payment={req.PaymentCode}\n  SalesValue={req.TotalPrice}\n  DeliveryType={req.DeliveryType}",
+                    req, headerFail);
+                return headerFail;
             }
 
             var onlyCourseItems = req.Items.All(i => i.IsCourseOrModule);
@@ -112,14 +116,16 @@ public class OrderService
                 req.OrderId, req.CustomerType);
 
             _logger.LogInformation("Uniconta order {OrderId} submitted successfully", req.OrderId);
-            _orderLog.LogSubmitted(req.OrderId, req.CustomerType, req.Email, $"{account} ({debtorStatus})");
-            return new OrderResult { Success = true, Message = $"Order submitted to debtor {account} ({debtorStatus})" };
+            var ok = new OrderResult { Success = true, Message = $"Order submitted to debtor {account} ({debtorStatus})" };
+            _orderLog.LogSubmitted(req.OrderId, req.CustomerType, req.Email, $"{account} ({debtorStatus})", req, ok);
+            return ok;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Order processing failed for order {OrderId}", req.OrderId);
-            _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message, ex.ToString());
-            return new OrderResult { Success = false, Message = ex.Message };
+            var crash = new OrderResult { Success = false, Message = ex.Message };
+            _orderLog.LogFailed(req.OrderId, req.CustomerType, req.Email, ex.Message, ex.ToString(), req, crash);
+            return crash;
         }
     }
 
