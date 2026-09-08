@@ -56,7 +56,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.Cookie.Name         = "sc_admin";
         options.Cookie.HttpOnly     = true;
         options.Cookie.SameSite     = SameSiteMode.Lax;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // Always, not SameAsRequest: the app sits behind a TLS-terminating proxy and
+        // therefore sees plain HTTP, so SameAsRequest left the session cookie without
+        // the Secure flag even though the browser was on HTTPS. The admin is reachable
+        // over HTTPS only, so the flag can be unconditional.
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
         options.ExpireTimeSpan      = TimeSpan.FromHours(8);
         options.SlidingExpiration   = true;
         // Return status codes instead of redirecting (the UI is a single page).
