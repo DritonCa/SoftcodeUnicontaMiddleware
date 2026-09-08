@@ -72,11 +72,17 @@ public class AdminController : ControllerBase
         var setupRequired = !await _users.AnyExistsAsync();
         var auth          = await HttpContext.AuthenticateAsync(CookieScheme);
 
+        var me = auth.Succeeded ? await CurrentUser() : null;
+
         return Ok(new
         {
             setupRequired,
             authenticated = auth.Succeeded,
-            username      = auth.Principal?.Identity?.Name
+            username      = auth.Principal?.Identity?.Name,
+            role          = me?.Role,
+            isAdmin       = me?.IsAdmin ?? false,
+            email         = me?.Email,
+            companies     = me?.AllowedCompanies()
         });
     }
 
@@ -119,10 +125,23 @@ public class AdminController : ControllerBase
 
     [HttpGet("/admin/api/logs")]
     [Authorize(AuthenticationSchemes = CookieScheme)]
-    public IActionResult Logs([FromQuery] string? search, [FromQuery] int limit = 500, [FromQuery] string? company = null)
+    public async Task<IActionResult> Logs([FromQuery] string? search, [FromQuery] int limit = 500, [FromQuery] string? company = null)
     {
+        var me = await CurrentUser();
+        if (me == null)
+            return Unauthorized();
+
+        if (!MaySee(me, company))
+            return Forbid();
+
         var (legacyId, legacyName) = LegacyCompany();
         var entries = _logReader.Read(search, Math.Clamp(limit, 1, 2000), company, legacyId, legacyName);
+
+        // A viewer without a company filter must still not see other companies' traffic.
+        var allowed = me.AllowedCompanies();
+        if (allowed.Count > 0)
+            entries = entries.Where(e => allowed.Contains(e.ClientId, StringComparer.OrdinalIgnoreCase)).ToList();
+
         return Ok(entries);
     }
 
@@ -132,15 +151,23 @@ public class AdminController : ControllerBase
     /// </summary>
     [HttpGet("/admin/api/dashboard")]
     [Authorize(AuthenticationSchemes = CookieScheme)]
-    public IActionResult Dashboard()
+    public async Task<IActionResult> Dashboard()
     {
+        var me = await CurrentUser();
+        if (me == null)
+            return Unauthorized();
+
+        var visible = me.AllowedCompanies();
         var (legacyId, legacyName) = LegacyCompany();
-        var stats = _logReader.Stats(null, legacyId, legacyName);
+        var stats = _logReader.Stats(visible, legacyId, legacyName);
 
         var registered = _db.Clients
             .Include(c => c.Tenant)
             .AsNoTracking()
             .ToList();
+
+        if (visible.Count > 0)
+            registered = registered.Where(c => visible.Contains(c.ClientId, StringComparer.OrdinalIgnoreCase)).ToList();
 
         var byClient = stats.Companies.ToDictionary(c => c.ClientId, StringComparer.OrdinalIgnoreCase);
 
@@ -167,6 +194,7 @@ public class AdminController : ControllerBase
         var known   = registered.Select(c => c.ClientId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var orphans = stats.Companies
             .Where(c => !known.Contains(c.ClientId))
+            .Where(c => visible.Count == 0 || visible.Contains(c.ClientId, StringComparer.OrdinalIgnoreCase))
             .Select(c => new
             {
                 clientId  = c.ClientId,
@@ -189,6 +217,140 @@ public class AdminController : ControllerBase
             lastEvent    = stats.LastEvent,
             companies    = companies.Concat(orphans).ToList()
         });
+    }
+
+    // ---- Users -----------------------------------------------------------------
+
+    public class NewUserReq
+    {
+        public string Username { get; set; } = "";
+        public string Password { get; set; } = "";
+        public string? Email   { get; set; }
+        public string Role     { get; set; } = "viewer";
+        public List<string>? Companies { get; set; }
+    }
+
+    public class UpdateUserReq
+    {
+        public int Id { get; set; }
+        public string? Email { get; set; }
+        public string Role   { get; set; } = "viewer";
+        public bool IsActive { get; set; } = true;
+        public List<string>? Companies { get; set; }
+    }
+
+    public class PasswordReq
+    {
+        public int Id { get; set; }
+        public string Password { get; set; } = "";
+    }
+
+    [HttpGet("/admin/api/users")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public async Task<IActionResult> Users()
+    {
+        if (await RequireAdmin() is { } denied) return denied;
+
+        var rows = (await _users.ListAsync()).Select(u => new
+        {
+            id        = u.Id,
+            username  = u.Username,
+            email     = u.Email,
+            role      = u.Role,
+            isActive  = u.IsActive,
+            companies = u.IsAdmin ? new List<string>() : u.AllowedCompanies().ToList(),
+            createdAt = u.CreatedAt.ToString("yyyy-MM-dd HH:mm"),
+            lastLogin = u.LastLoginAt?.ToString("yyyy-MM-dd HH:mm")
+        });
+
+        return Ok(rows);
+    }
+
+    [HttpPost("/admin/api/users")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public async Task<IActionResult> CreateUser([FromBody] NewUserReq r)
+    {
+        if (await RequireAdmin() is { } denied) return denied;
+
+        var (user, error) = await _users.CreateAsync(r.Username, r.Password, r.Email, r.Role, r.Companies);
+        return user == null
+            ? BadRequest(new { message = error ?? "Kunne ikke oprette brugeren." })
+            : Ok(new { id = user.Id, username = user.Username });
+    }
+
+    [HttpPost("/admin/api/users/update")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public async Task<IActionResult> UpdateUser([FromBody] UpdateUserReq r)
+    {
+        if (await RequireAdmin() is { } denied) return denied;
+
+        var error = await _users.UpdateAsync(r.Id, r.Email, r.Role, r.Companies, r.IsActive, Me());
+        return error == null ? Ok(new { ok = true }) : BadRequest(new { message = error });
+    }
+
+    /// <summary>
+    /// Set a password. An admin may set anyone's; everyone else only their own,
+    /// which is how a user changes their own code.
+    /// </summary>
+    [HttpPost("/admin/api/users/password")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public async Task<IActionResult> SetUserPassword([FromBody] PasswordReq r)
+    {
+        var me = await CurrentUser();
+        if (me == null)
+            return Unauthorized();
+
+        var targetId = r.Id > 0 ? r.Id : me.Id;
+        if (!me.IsAdmin && targetId != me.Id)
+            return Forbid();
+
+        var error = await _users.SetPasswordAsync(targetId, r.Password);
+        return error == null ? Ok(new { ok = true }) : BadRequest(new { message = error });
+    }
+
+    [HttpPost("/admin/api/users/delete")]
+    [Authorize(AuthenticationSchemes = CookieScheme)]
+    public async Task<IActionResult> DeleteUser([FromBody] PasswordReq r)
+    {
+        if (await RequireAdmin() is { } denied) return denied;
+
+        var error = await _users.DeleteAsync(r.Id, Me());
+        return error == null ? Ok(new { ok = true }) : BadRequest(new { message = error });
+    }
+
+    // ---- current user ------------------------------------------------------------
+
+    private string Me() => User?.Identity?.Name ?? "";
+
+    private async Task<AdminUser?> CurrentUser()
+    {
+        var name = Me();
+        if (string.IsNullOrEmpty(name))
+        {
+            // Status() runs as AllowAnonymous, so read the name off the cookie instead.
+            var auth = await HttpContext.AuthenticateAsync(CookieScheme);
+            name = auth.Principal?.Identity?.Name ?? "";
+        }
+
+        return string.IsNullOrEmpty(name) ? null : await _users.FindAsync(name);
+    }
+
+    private async Task<IActionResult?> RequireAdmin()
+    {
+        var me = await CurrentUser();
+        if (me == null) return Unauthorized();
+        return me.IsAdmin ? null : Forbid();
+    }
+
+    /// <summary>Whether the user may look at the given company (null = the whole log).</summary>
+    private static bool MaySee(AdminUser user, string? clientId)
+    {
+        var allowed = user.AllowedCompanies();
+        if (allowed.Count == 0)
+            return true;
+
+        return !string.IsNullOrWhiteSpace(clientId)
+            && allowed.Contains(clientId, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -382,6 +544,8 @@ public class AdminController : ControllerBase
   <div id="hdrRight" hidden>
     <button class="ghost navbtn" id="navDash">Dashboard</button>
     <button class="ghost navbtn" id="navCompanies">Virksomheder</button>
+    <button class="ghost navbtn" id="navUsers" hidden>Brugere</button>
+    <button class="ghost" id="myPassBtn" style="margin-left:6px;">Skift kode</button>
     <span class="who" id="whoami" style="margin-left:12px;"></span>
     <button class="ghost" id="logoutBtn" style="margin-left:12px;">Log ud</button>
   </div>
@@ -494,22 +658,70 @@ public class AdminController : ControllerBase
   </div>
 </div>
 
+<!-- USERS -->
+<div id="usersView" class="wrap" hidden>
+  <div class="toolbar">
+    <strong style="font-size:14px;">Brugere &amp; adgang</strong>
+    <button class="ghost" id="reloadUsers">Opdater</button>
+    <span class="status" id="userStatus"></span>
+  </div>
+  <table>
+    <thead><tr>
+      <th style="width:150px;">Brugernavn</th>
+      <th style="width:200px;">E-mail</th>
+      <th style="width:110px;">Rolle</th>
+      <th>Må se</th>
+      <th style="width:60px;">Aktiv</th>
+      <th style="width:130px;">Sidste login</th>
+      <th style="width:210px;"></th>
+    </tr></thead>
+    <tbody id="userRows"></tbody>
+  </table>
+  <div class="empty" id="userEmpty" hidden>Ingen brugere endnu.</div>
+
+  <div class="card" style="max-width:none;margin:24px 0 0;">
+    <h2 style="font-size:15px;">Opret bruger</h2>
+    <p>En <strong>administrator</strong> ser alle virksomheder og kan oprette brugere. En <strong>medarbejder</strong> ser kun de virksomheder du vælger.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="flex:1;min-width:150px;"><label>Brugernavn</label><input id="nuUser"></div>
+      <div style="flex:1;min-width:180px;"><label>E-mail</label><input id="nuEmail" type="email"></div>
+      <div style="flex:1;min-width:150px;"><label>Adgangskode (min. 8)</label><input id="nuPass" type="password"></div>
+      <div style="flex:0 0 150px;"><label>Rolle</label>
+        <select id="nuRole" style="width:100%;padding:11px 12px;border-radius:6px;border:1px solid var(--line);background:#0b1220;color:var(--txt);font-size:15px;">
+          <option value="viewer">Medarbejder</option>
+          <option value="admin">Administrator</option>
+        </select>
+      </div>
+    </div>
+    <div id="nuCompaniesWrap" style="margin-top:14px;">
+      <label>Må se disse virksomheder</label>
+      <div id="nuCompanies" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;"></div>
+    </div>
+    <div class="row-actions"><button id="nuBtn">Opret bruger</button></div>
+    <div class="msg" id="nuMsg"></div>
+  </div>
+</div>
+
 <script>
 const $ = s => document.querySelector(s);
 const api = (p, opt) => fetch('/admin/api/' + p, Object.assign({ headers:{'Content-Type':'application/json'} }, opt));
 let timer = null;
 let currentCompany = null;      // { clientId, name } — whose log is on screen
 let openRows = new Set();       // rows the user expanded, kept across auto-refresh
+let me = { isAdmin:false, companies:[] };
+let allCompanies = [];          // [{clientId, company}] for the access checkboxes
 
 function show(view) {
-  for (const v of ['setupView','loginView','dashView','logView','companiesView']) $('#'+v).hidden = (v !== view);
+  for (const v of ['setupView','loginView','dashView','logView','companiesView','usersView']) $('#'+v).hidden = (v !== view);
   $('#hdrRight').hidden = ['setupView','loginView'].includes(view);
   $('#navDash').classList.toggle('active', view === 'dashView' || view === 'logView');
   $('#navCompanies').classList.toggle('active', view === 'companiesView');
+  $('#navUsers').classList.toggle('active', view === 'usersView');
   if (timer) { clearInterval(timer); timer = null; }
   if (view === 'dashView') { loadDashboard(); timer = setInterval(loadDashboard, 10000); }
   if (view === 'logView')  { loadLogs();      timer = setInterval(loadLogs, 5000); }
   if (view === 'companiesView') { loadCompanies(); }
+  if (view === 'usersView') { loadUsers(); }
 }
 
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -518,8 +730,20 @@ async function boot() {
   const s = await (await api('status')).json();
   if (s.setupRequired) return show('setupView');
   if (!s.authenticated) return show('loginView');
-  $('#whoami').textContent = s.username || '';
+  applyMe(s);
   show('dashView');
+}
+
+function applyMe(s) {
+  me = { isAdmin: !!s.isAdmin, companies: s.companies || [], username: s.username };
+  $('#whoami').textContent = (s.username || '') + (s.isAdmin ? '' : ' · medarbejder');
+  // Only an administrator manages companies and users.
+  $('#navUsers').hidden      = !s.isAdmin;
+  $('#navCompanies').hidden  = !s.isAdmin;
+}
+
+async function refreshMe() {
+  try { applyMe(await (await api('status')).json()); } catch {}
 }
 
 $('#suBtn').onclick = async () => {
@@ -527,7 +751,7 @@ $('#suBtn').onclick = async () => {
   $('#suMsg').textContent = '';
   if (p !== p2) { $('#suMsg').textContent = 'Adgangskoderne er ikke ens.'; return; }
   const r = await api('setup', { method:'POST', body: JSON.stringify({ username:u, password:p }) });
-  if (r.ok) { const d = await r.json(); $('#whoami').textContent = d.username; show('dashView'); }
+  if (r.ok) { await refreshMe(); show('dashView'); }
   else { $('#suMsg').textContent = (await r.json().catch(()=>({}))).message || 'Kunne ikke oprette.'; }
 };
 
@@ -535,7 +759,7 @@ $('#liBtn').onclick = async () => {
   const u = $('#liUser').value.trim(), p = $('#liPass').value;
   $('#liMsg').textContent = '';
   const r = await api('login', { method:'POST', body: JSON.stringify({ username:u, password:p }) });
-  if (r.ok) { const d = await r.json(); $('#whoami').textContent = d.username; show('dashView'); }
+  if (r.ok) { await refreshMe(); show('dashView'); }
   else { $('#liMsg').textContent = (await r.json().catch(()=>({}))).message || 'Login mislykkedes.'; }
 };
 $('#liPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#liBtn').click(); });
@@ -543,6 +767,8 @@ $('#liPass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#liBtn
 $('#logoutBtn').onclick = async () => { await api('logout', { method:'POST' }); show('loginView'); };
 $('#navDash').onclick = () => show('dashView');
 $('#navCompanies').onclick = () => show('companiesView');
+$('#navUsers').onclick = () => show('usersView');
+$('#reloadUsers').onclick = () => loadUsers();
 $('#backToDash').onclick = () => show('dashView');
 $('#reloadDash').onclick = () => loadDashboard();
 $('#refreshBtn').onclick = () => loadLogs();
@@ -714,6 +940,129 @@ $('#ncBtn').onclick = async () => {
     msg.className = 'msg err';
     msg.textContent = (await r.json().catch(()=>({}))).message || 'Kunne ikke oprette virksomheden.';
   }
+};
+
+// ---- users -----------------------------------------------------------------
+
+function roleLabel(r) { return r === 'admin' ? 'Administrator' : 'Medarbejder'; }
+
+function companyCheckboxes(containerId, selected, idPrefix) {
+  const sel = new Set(selected || []);
+  $('#'+containerId).innerHTML = allCompanies.map(c =>
+    '<label style="display:flex;align-items:center;gap:6px;text-transform:none;margin:0;color:var(--txt);">'+
+      '<input type="checkbox" style="width:auto;" class="'+idPrefix+'" value="'+esc(c.clientId)+'"'+(sel.has(c.clientId)?' checked':'')+'>'+
+      esc(c.company)+
+    '</label>').join('') || '<span class="muted-note">Ingen virksomheder oprettet endnu.</span>';
+}
+
+function checkedCompanies(cls) {
+  return Array.from(document.querySelectorAll('input.'+cls+':checked')).map(i => i.value);
+}
+
+async function loadUsers() {
+  $('#userStatus').textContent = 'Henter …';
+  try {
+    const cr = await api('companies');
+    if (cr.ok) allCompanies = (await cr.json()).map(c => ({ clientId:c.clientId, company:c.tenantName }));
+  } catch {}
+  companyCheckboxes('nuCompanies', [], 'nucomp');
+  $('#nuCompaniesWrap').hidden = ($('#nuRole').value === 'admin');
+
+  let r;
+  try { r = await api('users'); } catch { return; }
+  if (r.status === 401) { show('loginView'); return; }
+  if (r.status === 403) { $('#userStatus').textContent = 'Kun administratorer.'; return; }
+  if (!r.ok) { $('#userStatus').textContent = 'Kunne ikke hente.'; return; }
+  const data = await r.json();
+
+  $('#userRows').innerHTML = data.map(u => {
+    const names = u.role === 'admin'
+      ? '<span class="muted-note">alle virksomheder</span>'
+      : (u.companies.length
+          ? u.companies.map(id => esc((allCompanies.find(c => c.clientId === id) || {}).company || id)).join(', ')
+          : '<span class="muted-note">ingen</span>');
+    return '<tr>'+
+      '<td>'+esc(u.username)+'</td>'+
+      '<td>'+esc(u.email || '—')+'</td>'+
+      '<td>'+roleLabel(u.role)+'</td>'+
+      '<td>'+names+'</td>'+
+      '<td>'+(u.isActive ? '✓' : '—')+'</td>'+
+      '<td>'+esc(u.lastLogin || '—')+'</td>'+
+      '<td>'+
+        '<button class="linkbtn" onclick="editUser('+u.id+')">Redigér</button>'+
+        '<button class="linkbtn" onclick="resetPass('+u.id+',\''+esc(u.username)+'\')">Ny kode</button>'+
+        '<button class="linkbtn" onclick="removeUser('+u.id+',\''+esc(u.username)+'\')">Slet</button>'+
+      '</td>'+
+    '</tr>';
+  }).join('');
+  window._users = data;
+  $('#userEmpty').hidden = data.length > 0;
+  $('#userStatus').textContent = data.length + ' bruger(e)';
+}
+
+$('#nuRole').onchange = () => { $('#nuCompaniesWrap').hidden = ($('#nuRole').value === 'admin'); };
+
+$('#nuBtn').onclick = async () => {
+  const msg = $('#nuMsg'); msg.className = 'msg'; msg.textContent = '';
+  const body = {
+    username: $('#nuUser').value.trim(),
+    email:    $('#nuEmail').value.trim(),
+    password: $('#nuPass').value,
+    role:     $('#nuRole').value,
+    companies: checkedCompanies('nucomp')
+  };
+  const r = await api('users', { method:'POST', body: JSON.stringify(body) });
+  if (r.ok) {
+    msg.className = 'msg ok'; msg.textContent = 'Bruger oprettet.';
+    $('#nuUser').value = ''; $('#nuEmail').value = ''; $('#nuPass').value = '';
+    loadUsers();
+  } else {
+    msg.className = 'msg err';
+    msg.textContent = (await r.json().catch(()=>({}))).message || 'Kunne ikke oprette brugeren.';
+  }
+};
+
+async function editUser(id) {
+  const u = (window._users || []).find(x => x.id === id);
+  if (!u) return;
+  const email = prompt('E-mail for "' + u.username + '":', u.email || '');
+  if (email === null) return;
+  const role = confirm('Skal "' + u.username + '" være administrator?\n\nOK = administrator (ser alt)\nAnnullér = medarbejder') ? 'admin' : 'viewer';
+  let companies = u.companies;
+  if (role === 'viewer') {
+    const list = allCompanies.map((c,i) => (i+1) + ') ' + c.company).join('\n');
+    const pick = prompt('Hvilke virksomheder må "' + u.username + '" se?\nSkriv numre adskilt af komma:\n\n' + list,
+                        allCompanies.map((c,i) => u.companies.includes(c.clientId) ? (i+1) : null).filter(Boolean).join(','));
+    if (pick === null) return;
+    companies = pick.split(',').map(n => allCompanies[parseInt(n.trim(),10)-1]).filter(Boolean).map(c => c.clientId);
+  }
+  const isActive = confirm('Skal "' + u.username + '" være aktiv?\n\nOK = aktiv\nAnnullér = spærret');
+  const r = await api('users/update', { method:'POST', body: JSON.stringify({ id, email, role, companies, isActive }) });
+  if (r.ok) { $('#userStatus').textContent = 'Gemt.'; loadUsers(); }
+  else alert((await r.json().catch(()=>({}))).message || 'Kunne ikke gemme.');
+}
+
+async function resetPass(id, username) {
+  const p = prompt('Ny adgangskode for "' + username + '" (min. 8 tegn):');
+  if (p === null) return;
+  const r = await api('users/password', { method:'POST', body: JSON.stringify({ id, password: p }) });
+  if (r.ok) { $('#userStatus').textContent = 'Adgangskode opdateret for ' + username + '.'; }
+  else alert((await r.json().catch(()=>({}))).message || 'Kunne ikke opdatere adgangskoden.');
+}
+
+async function removeUser(id, username) {
+  if (!confirm('Slet brugeren "' + username + '"?')) return;
+  const r = await api('users/delete', { method:'POST', body: JSON.stringify({ id }) });
+  if (r.ok) loadUsers();
+  else alert((await r.json().catch(()=>({}))).message || 'Kunne ikke slette brugeren.');
+}
+
+$('#myPassBtn').onclick = async () => {
+  const p = prompt('Ny adgangskode for din egen bruger (min. 8 tegn):');
+  if (p === null) return;
+  const r = await api('users/password', { method:'POST', body: JSON.stringify({ id: 0, password: p }) });
+  if (r.ok) alert('Din adgangskode er opdateret.');
+  else alert((await r.json().catch(()=>({}))).message || 'Kunne ikke opdatere adgangskoden.');
 };
 
 boot();

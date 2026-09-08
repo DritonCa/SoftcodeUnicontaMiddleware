@@ -107,16 +107,16 @@ namespace SoftcodeUnicontaMiddleware.Services
             return list.Count > limit ? list.GetRange(0, limit) : list;
         }
 
-        public OrderLogStats Stats(string? clientId = null, string? legacyClientId = null, string? legacyCompany = null)
+        /// <summary>
+        /// Counts over the given companies; an empty or null <paramref name="clientIds"/>
+        /// means every company.
+        /// </summary>
+        public OrderLogStats Stats(IReadOnlyCollection<string>? clientIds = null,
+                                   string? legacyClientId = null, string? legacyCompany = null)
         {
             var all = ReadAll(legacyClientId, legacyCompany);
-            if (!string.IsNullOrWhiteSpace(clientId))
-            {
-                var c = clientId.Trim();
-                all = (c == NoCompany
-                    ? all.Where(e => string.IsNullOrEmpty(e.ClientId))
-                    : all.Where(e => string.Equals(e.ClientId, c, StringComparison.OrdinalIgnoreCase))).ToList();
-            }
+            if (clientIds is { Count: > 0 })
+                all = all.Where(e => clientIds.Contains(e.ClientId ?? "", StringComparer.OrdinalIgnoreCase)).ToList();
 
             var cutoff = DateTime.UtcNow.AddHours(-24);
 

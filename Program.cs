@@ -165,6 +165,29 @@ using (var scope = app.Services.CreateScope())
     db.Database.ExecuteSqlRaw(
         @"CREATE UNIQUE INDEX IF NOT EXISTS ""IX_AdminUsers_Username"" ON ""AdminUsers"" (""Username"");");
 
+    // Roles, e-mail and per-company access, added to AdminUsers after the table
+    // shipped. SQLite has no ADD COLUMN IF NOT EXISTS, so each one is attempted and
+    // the "duplicate column" error ignored — the same pattern as ClientSecretEnc
+    // below. Existing rows default to an active admin with access to everything,
+    // which is what the single first-run login already was.
+    foreach (var column in new[]
+             {
+                 @"""Email"" TEXT NULL",
+                 @"""Role"" TEXT NOT NULL DEFAULT 'admin'",
+                 @"""AllowedClientIds"" TEXT NULL",
+                 @"""IsActive"" INTEGER NOT NULL DEFAULT 1"
+             })
+    {
+        try
+        {
+            db.Database.ExecuteSqlRaw($@"ALTER TABLE ""AdminUsers"" ADD COLUMN {column};");
+        }
+        catch
+        {
+            /* column already exists */
+        }
+    }
+
     // ClientSecretEnc (reversibly-encrypted secret for the admin Companies view) is
     // added out-of-migration; SQLite has no ADD COLUMN IF NOT EXISTS, so ignore the
     // "duplicate column" error on subsequent boots.
