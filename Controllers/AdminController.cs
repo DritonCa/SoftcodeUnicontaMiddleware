@@ -478,7 +478,7 @@ public class AdminController : ControllerBase
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Uniconta Middleware · Admin</title>
+<title>Softcode · Uniconta Middleware</title>
 <style>
   :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --muted:#94a3b8; --accent:#00bcd4; }
   * { box-sizing:border-box; }
@@ -540,7 +540,7 @@ public class AdminController : ControllerBase
 </head>
 <body>
 <header>
-  <h1>UNICONTA · MIDDLEWARE ADMIN</h1>
+  <h1>SOFTCODE · UNICONTA MIDDLEWARE</h1>
   <div id="hdrRight" hidden>
     <button class="ghost navbtn" id="navDash">Dashboard</button>
     <button class="ghost navbtn" id="navCompanies">Virksomheder</button>
