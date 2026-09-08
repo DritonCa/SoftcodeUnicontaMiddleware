@@ -223,6 +223,9 @@ public class OrderService
             _DeliveryCountry = CountryCode.Denmark
         };
 
+        if (!string.IsNullOrWhiteSpace(req.OurRef))
+            order._OurRef = req.OurRef.Trim();
+
         if (!string.IsNullOrEmpty(req.Comment))
             order._Remark = req.Comment;
 

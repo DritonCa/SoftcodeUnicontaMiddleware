@@ -56,6 +56,12 @@ public class OrderRequest
     public string ShippingProductSku { get; set; } = "8000";
 
     /// <summary>
+    /// The clerk web orders are booked under in Uniconta ("Vores ref"), configured in
+    /// Magento admin. Set on the sales order so it is filled in before invoicing.
+    /// </summary>
+    public string? OurRef { get; set; }
+
+    /// <summary>
     /// True when Magento sends prices incl. 25% DK VAT → middleware strips × 0.8.
     /// False when Magento sends prices excl. VAT → middleware uses price as-is.
     /// </summary>
