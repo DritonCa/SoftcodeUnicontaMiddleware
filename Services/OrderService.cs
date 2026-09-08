@@ -97,20 +97,14 @@ public class OrderService
                 }
             }
 
-            if (createdLines.Count > 0)
-            {
-                var invoiceResult = await client.PostInvoiceAsync(order, createdLines.ToArray());
-                if (invoiceResult == null || invoiceResult.Err != ErrorCodes.Succes)
-                {
-                    var warn = $"PostInvoice returned {invoiceResult?.Err}";
-                    _logger.LogWarning(warn + " for order {OrderId}", req.OrderId);
-                    _orderLog.LogLineWarning(req.OrderId, "INVOICE", warn);
-                }
-                else
-                {
-                    _logger.LogInformation("Invoice posted in Uniconta for order {OrderId}", req.OrderId);
-                }
-            }
+            // Nothing is invoiced automatically — for any customer type. Only the
+            // sales order is created here. The invoice is posted later via
+            // POST /orders/{n}/invoice, which fires when the order is invoiced in
+            // the Magento backend, so Uniconta only ever shows what has actually
+            // been invoiced.
+            _logger.LogInformation(
+                "Order {OrderId} ({CustomerType}) created as sales order — invoice deferred until invoiced in Magento",
+                req.OrderId, req.CustomerType);
 
             _logger.LogInformation("Uniconta order {OrderId} submitted successfully", req.OrderId);
             _orderLog.LogSubmitted(req.OrderId, req.CustomerType, req.Email, $"{account} ({debtorStatus})");
