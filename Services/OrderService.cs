@@ -237,8 +237,13 @@ public class OrderService
         }
         else
         {
-            // Home/company address
-            order._DeliveryName    = req.DeliveryName;
+            // Home/company address. On a "Ship to Business" order the parcel goes to a
+            // company, so the company is the recipient and the person named in the
+            // checkout drops to the attention line. Without a company both lines would
+            // repeat the same name.
+            var company = req.DeliveryCompany?.Trim();
+
+            order._DeliveryName     = !string.IsNullOrEmpty(company) ? company : req.DeliveryName;
             order._DeliveryAddress1 = $"Att.: {req.DeliveryName}";
             order._DeliveryAddress2 = req.DeliveryAddress;
             order._DeliveryZipCode  = req.DeliveryPostcode;

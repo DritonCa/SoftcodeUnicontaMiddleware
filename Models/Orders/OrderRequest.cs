@@ -30,6 +30,13 @@ public class OrderRequest
     public string DeliveryPostcode { get; set; } = "";
     public string DeliveryCity { get; set; } = "";
 
+    /// <summary>
+    /// Company the parcel goes to, set only when the customer chose "Ship to Business".
+    /// When present it becomes the Uniconta delivery name and DeliveryName drops to
+    /// the attention line.
+    /// </summary>
+    public string? DeliveryCompany { get; set; }
+
     // GLS parcel shop (only when DeliveryType == 2)
     public string? GlsShopName { get; set; }
     public string? GlsShopAddress { get; set; }
