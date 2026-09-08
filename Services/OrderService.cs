@@ -244,17 +244,23 @@ public class OrderService
             order._DeliveryZipCode  = req.GlsShopPostcode ?? "";
             order._DeliveryCity     = req.GlsShopCity ?? "";
         }
-        else
+        else if (!string.IsNullOrWhiteSpace(req.DeliveryCompany))
         {
-            // Home/company address. On a "Ship to Business" order the parcel goes to a
-            // company, so the company is the recipient and the person named in the
-            // checkout drops to the attention line. Without a company both lines would
-            // repeat the same name.
-            var company = req.DeliveryCompany?.Trim();
-
-            order._DeliveryName     = !string.IsNullOrEmpty(company) ? company : req.DeliveryName;
+            // Ship to Business: the parcel goes to a company, so the company is the
+            // recipient and the person named in the checkout is the attention line.
+            order._DeliveryName     = req.DeliveryCompany.Trim();
             order._DeliveryAddress1 = $"Att.: {req.DeliveryName}";
             order._DeliveryAddress2 = req.DeliveryAddress;
+            order._DeliveryZipCode  = req.DeliveryPostcode;
+            order._DeliveryCity     = req.DeliveryCity;
+        }
+        else
+        {
+            // Ship to Home: the recipient is the person, and the delivery name already
+            // says so. An attention line here would only repeat it.
+            order._DeliveryName     = req.DeliveryName;
+            order._DeliveryAddress1 = req.DeliveryAddress;
+            order._DeliveryAddress2 = "";
             order._DeliveryZipCode  = req.DeliveryPostcode;
             order._DeliveryCity     = req.DeliveryCity;
         }
