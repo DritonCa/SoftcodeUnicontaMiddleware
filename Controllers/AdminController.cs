@@ -125,7 +125,11 @@ public class AdminController : ControllerBase
 
     [HttpGet("/admin/api/logs")]
     [Authorize(AuthenticationSchemes = CookieScheme)]
-    public async Task<IActionResult> Logs([FromQuery] string? search, [FromQuery] int limit = 500, [FromQuery] string? company = null)
+    public async Task<IActionResult> Logs(
+        [FromQuery] string? search,
+        [FromQuery] string? company = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25)
     {
         var me = await CurrentUser();
         if (me == null)
@@ -135,15 +139,28 @@ public class AdminController : ControllerBase
             return Forbid();
 
         var (legacyId, legacyName) = LegacyCompany();
-        var entries = _logReader.Read(search, Math.Clamp(limit, 1, 2000), company, legacyId, legacyName);
+        var entries = _logReader.Read(search, MaxEntries, company, legacyId, legacyName);
 
         // A viewer without a company filter must still not see other companies' traffic.
         var allowed = me.AllowedCompanies();
         if (allowed.Count > 0)
             entries = entries.Where(e => allowed.Contains(e.ClientId, StringComparer.OrdinalIgnoreCase)).ToList();
 
-        return Ok(entries);
+        pageSize = Math.Clamp(pageSize, 10, 200);
+        var total = entries.Count;
+        var pages = Math.Max(1, (total + pageSize - 1) / pageSize);
+        page      = Math.Clamp(page, 1, pages);
+
+        var items = entries.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        return Ok(new { items, total, page, pageSize, pages });
     }
+
+    /// <summary>
+    /// Ceiling on how much of the log is read before paging. The log is a file, so the
+    /// whole of it is parsed per request; this keeps a runaway file from doing so.
+    /// </summary>
+    private const int MaxEntries = 20_000;
 
     /// <summary>
     /// Front-page figures: order counts across every company, plus a per-company
@@ -535,6 +552,10 @@ public class AdminController : ControllerBase
   .payload-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-top:12px; }
   .chev { display:inline-block; width:12px; color:var(--muted); }
   .crumb { color:var(--muted); font-size:13px; margin-bottom:10px; }
+  .pager { display:flex; align-items:center; gap:10px; margin-top:16px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+  .pager button { padding:6px 12px; font-size:13px; }
+  .pager button:disabled { opacity:.35; cursor:default; }
+  .pager select { padding:6px 8px; border-radius:6px; border:1px solid var(--line); background:#0b1220; color:var(--txt); font-size:13px; }
   .crumb button { padding:0; }
 </style>
 </head>
@@ -624,6 +645,21 @@ public class AdminController : ControllerBase
     <tbody id="rows"></tbody>
   </table>
   <div class="empty" id="empty" hidden>Ingen log-linjer endnu.</div>
+
+  <div class="pager" id="pager" hidden>
+    <button class="ghost" id="pgFirst">« Første</button>
+    <button class="ghost" id="pgPrev">‹ Forrige</button>
+    <span id="pgInfo"></span>
+    <button class="ghost" id="pgNext">Næste ›</button>
+    <button class="ghost" id="pgLast">Sidste »</button>
+    <span style="margin-left:auto;">
+      Vis
+      <select id="pgSize">
+        <option>25</option><option>50</option><option>100</option><option>200</option>
+      </select>
+      pr. side
+    </span>
+  </div>
 </div>
 
 <!-- COMPANIES -->
@@ -708,6 +744,8 @@ const api = (p, opt) => fetch('/admin/api/' + p, Object.assign({ headers:{'Conte
 let timer = null;
 let currentCompany = null;      // { clientId, name } — whose log is on screen
 let openRows = new Set();       // rows the user expanded, kept across auto-refresh
+let logPage = 1;                // current page of the order log
+let logPageSize = 25;
 let me = { isAdmin:false, companies:[] };
 let allCompanies = [];          // [{clientId, company}] for the access checkboxes
 
@@ -774,7 +812,17 @@ $('#reloadDash').onclick = () => loadDashboard();
 $('#refreshBtn').onclick = () => loadLogs();
 $('#reloadCompanies').onclick = () => loadCompanies();
 let searchDebounce;
-$('#search').addEventListener('input', () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(loadLogs, 300); });
+$('#search').addEventListener('input', () => {
+  clearTimeout(searchDebounce);
+  // En ny søgning har sin egen sidetælling — bliv ikke stående på side 7 af et andet resultat.
+  searchDebounce = setTimeout(() => { logPage = 1; loadLogs(); }, 300);
+});
+
+$('#pgFirst').onclick = () => { logPage = 1; loadLogs(); };
+$('#pgPrev').onclick  = () => { if (logPage > 1) { logPage--; loadLogs(); } };
+$('#pgNext').onclick  = () => { logPage++; loadLogs(); };
+$('#pgLast').onclick  = () => { logPage = 1e9; loadLogs(); };   // serveren klemmer til sidste side
+$('#pgSize').onchange = () => { logPageSize = parseInt($('#pgSize').value, 10); logPage = 1; loadLogs(); };
 
 // ---- dashboard -------------------------------------------------------------
 
@@ -818,6 +866,7 @@ async function loadDashboard() {
 function openLog(clientId, name) {
   currentCompany = { clientId, name };
   openRows = new Set();
+  logPage = 1;
   $('#logCompanyName').textContent = name;
   $('#search').value = '';
   show('logView');
@@ -832,10 +881,15 @@ async function loadLogs() {
   if (!currentCompany) { show('dashView'); return; }
   const q = encodeURIComponent($('#search').value.trim());
   let r;
-  try { r = await api('logs?company=' + encodeURIComponent(currentCompany.clientId) + '&search=' + q); } catch { return; }
+  try {
+    r = await api('logs?company=' + encodeURIComponent(currentCompany.clientId) +
+                  '&search=' + q + '&page=' + logPage + '&pageSize=' + logPageSize);
+  } catch { return; }
   if (r.status === 401) { show('loginView'); return; }
   if (!r.ok) return;
-  const data = await r.json();
+  const res  = await r.json();
+  const data = res.items || [];
+  logPage = res.page;        // serveren har klemt sidetallet ind i det gyldige interval
 
   $('#rows').innerHTML = data.map((e, i) => {
     const lvl  = (e.level || '').trim();
@@ -860,7 +914,15 @@ async function loadLogs() {
   }).join('');
 
   $('#empty').hidden = data.length > 0;
-  $('#logStatus').textContent = 'Opdateret ' + new Date().toLocaleTimeString('da-DK') + ' · ' + data.length + ' linjer';
+
+  const from = res.total ? (res.page - 1) * res.pageSize + 1 : 0;
+  const to   = Math.min(res.page * res.pageSize, res.total);
+  $('#pager').hidden = res.total <= res.pageSize;
+  $('#pgInfo').textContent = 'Linje ' + from + '–' + to + ' af ' + res.total + '  ·  side ' + res.page + ' af ' + res.pages;
+  $('#pgFirst').disabled = $('#pgPrev').disabled = res.page <= 1;
+  $('#pgNext').disabled  = $('#pgLast').disabled = res.page >= res.pages;
+
+  $('#logStatus').textContent = 'Opdateret ' + new Date().toLocaleTimeString('da-DK') + ' · ' + res.total + ' linjer i alt';
 }
 
 function toggleRow(key, i) {
