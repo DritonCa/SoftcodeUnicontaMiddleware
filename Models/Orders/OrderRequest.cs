@@ -37,6 +37,12 @@ public class OrderRequest
     public string? GlsShopCity { get; set; }
 
     public double TotalPrice { get; set; }
+
+    /// <summary>
+    /// What the customer paid for delivery, incl. VAT. The Uniconta shipping item
+    /// is VAT-free, so this amount is posted as-is — unlike the product lines it is
+    /// never reduced by × 0.8.
+    /// </summary>
     public double ShippingAmount { get; set; }
 
     /// <summary>SKU of the Uniconta shipping product (configured in Magento admin)</summary>

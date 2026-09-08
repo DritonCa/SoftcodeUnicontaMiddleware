@@ -76,13 +76,18 @@ public class OrderService
 
             if (!onlyCourseItems && req.ShippingAmount > 0)
             {
+                // Shipping is booked the way it is entered by hand in Uniconta:
+                // one VAT-free amount in the "I alt" column, with no quantity and
+                // no unit sales price. _AmountEntered is that column; a _Qty of 1
+                // plus a _Price would instead print "1 ... 31,20" under Antal and
+                // Salgspris, and would post the ex-VAT amount rather than what the
+                // customer actually paid for delivery.
                 var shippingLine = new DebtorOrderLineClient
                 {
-                    _OrderNumber = req.OrderId,
-                    _Item        = req.ShippingProductSku,
-                    _Price       = req.ShippingAmount,
-                    _Qty         = 1,
-                    _Storage     = StorageRegister.Move
+                    _OrderNumber   = req.OrderId,
+                    _Item          = req.ShippingProductSku,
+                    _AmountEntered = req.ShippingAmount,
+                    _Storage       = StorageRegister.Move
                 };
                 var shResult = await client.CreateOrderLineAsync(shippingLine);
                 if (shResult != ErrorCodes.Succes)
